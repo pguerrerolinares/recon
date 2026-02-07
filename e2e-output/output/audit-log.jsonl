@@ -1,0 +1,6 @@
+{"timestamp": "2026-02-07T23:03:27.152945+00:00", "phase": "investigation", "agent": "pipeline", "action": "phase_start", "detail": ""}
+{"timestamp": "2026-02-07T23:05:08.507343+00:00", "phase": "investigation", "agent": "pipeline", "action": "phase_end", "detail": "", "metadata": {"output_files": ["./e2e-output/research/general-general-investigation.md"]}}
+{"timestamp": "2026-02-07T23:05:08.526152+00:00", "phase": "verification", "agent": "pipeline", "action": "phase_start", "detail": ""}
+{"timestamp": "2026-02-07T23:08:49.864642+00:00", "phase": "verification", "agent": "pipeline", "action": "phase_end", "detail": "", "metadata": {"output_files": ["./e2e-output/verification/report.md"]}}
+{"timestamp": "2026-02-07T23:08:49.875140+00:00", "phase": "synthesis", "agent": "pipeline", "action": "phase_start", "detail": ""}
+{"timestamp": "2026-02-07T23:10:14.568322+00:00", "phase": "synthesis", "agent": "pipeline", "action": "phase_end", "detail": "", "metadata": {"output_files": ["./e2e-output/output/final-report.md"]}}

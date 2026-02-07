@@ -2,15 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install dependencies first for better layer caching
-COPY pyproject.toml .
-RUN pip install --no-cache-dir .
-
-# Copy source code
+# Copy everything needed for install
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ src/
 
-# Re-install to register the package entry point
-RUN pip install --no-cache-dir -e .
+# Install the package (non-editable, production mode)
+RUN pip install --no-cache-dir .
 
 WORKDIR /workspace
 

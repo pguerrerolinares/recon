@@ -1,0 +1,17 @@
+# Minimal end-to-end test plan.
+# Uses Kimi (moonshot) + Tavily. Single researcher, quick depth.
+
+topic: "Model Context Protocol (MCP) ecosystem in 2025"
+questions:
+  - "What is MCP and who created it?"
+  - "What MCP servers and clients exist today?"
+focus: "Developer tools and adoption"
+depth: quick
+verify: true
+provider: kimi
+model: kimi-k2.5
+search:
+  provider: tavily
+output_dir: ./e2e-output/output
+research_dir: ./e2e-output/research
+verification_dir: ./e2e-output/verification

@@ -250,14 +250,71 @@ def verify(
 
 @app.command()
 def status(
-    plan_file: Annotated[
-        Path | None,
-        typer.Argument(help="Path to plan.yaml file"),
-    ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Argument(help="Output directory to read status from"),
+    ] = Path("./output"),
 ) -> None:
     """Show status of a previous or running execution."""
-    # TODO: Implement status from SQLite state (Week 4)
-    console.print("[yellow]Status tracking not yet implemented. Coming in v0.1.0.[/]")
+    from recon.callbacks.audit import AuditLogger
+
+    audit_file = output_dir / "audit-log.jsonl"
+    if not audit_file.exists():
+        console.print(f"[yellow]No audit log found at {audit_file}[/]")
+        console.print("Run a pipeline first: [bold]recon run <plan.yaml>[/]")
+        raise typer.Exit(code=1)
+
+    logger = AuditLogger(output_dir=str(output_dir))
+    entries = logger.read_log()
+
+    if not entries:
+        console.print("[yellow]Audit log is empty.[/]")
+        raise typer.Exit(code=0)
+
+    # Build status table from audit events.
+    table = Table(title="Pipeline Status")
+    table.add_column("Phase", style="cyan", width=16)
+    table.add_column("Status", width=12)
+    table.add_column("Started", style="dim", width=22)
+    table.add_column("Finished", style="dim", width=22)
+    table.add_column("Output", style="white")
+
+    phases: dict[str, dict[str, str]] = {}
+    for entry in entries:
+        phase = entry.get("phase", "")
+        action = entry.get("action", "")
+        ts = entry.get("timestamp", "")[:19]
+
+        if action == "phase_start":
+            phases[phase] = {"started": ts, "finished": "", "status": "running", "output": ""}
+        elif action == "phase_end" and phase in phases:
+            phases[phase]["finished"] = ts
+            phases[phase]["status"] = "done"
+            files = entry.get("metadata", {}).get("output_files", [])
+            if files:
+                phases[phase]["output"] = ", ".join(files)
+        elif action == "error" and phase in phases:
+            phases[phase]["status"] = "error"
+
+    for phase_name, info in phases.items():
+        status_text = info["status"]
+        if status_text == "done":
+            style = "[green]done[/]"
+        elif status_text == "error":
+            style = "[red]error[/]"
+        else:
+            style = "[yellow]running[/]"
+        table.add_row(phase_name, style, info["started"], info["finished"], info["output"])
+
+    console.print(table)
+
+    # Show total time if pipeline completed.
+    phase_list = list(phases.values())
+    if phase_list and phase_list[-1]["finished"]:
+        first_start = phase_list[0].get("started", "")
+        last_end = phase_list[-1].get("finished", "")
+        if first_start and last_end:
+            console.print(f"\n[dim]Pipeline ran from {first_start} to {last_end}[/]")
 
 
 @app.command()
@@ -268,12 +325,97 @@ def rerun(
     ],
     phase: Annotated[
         str,
-        typer.Option("--phase", help="Phase to re-run: investigation, verification, synthesis"),
+        typer.Option(
+            "--phase",
+            help="Phase to re-run: investigation, verification, synthesis",
+        ),
     ] = "verification",
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Verbose output"),
+    ] = False,
 ) -> None:
     """Re-run a specific phase of a previous execution."""
-    # TODO: Implement rerun from state (Week 4)
-    console.print(f"[yellow]Rerun for phase '{phase}' not yet implemented. Coming in v0.1.0.[/]")
+    valid_phases = ("investigation", "verification", "synthesis")
+    if phase not in valid_phases:
+        console.print(
+            f"[red]Error:[/] Invalid phase '{phase}'. Choose from: {', '.join(valid_phases)}"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        plan = load_plan(plan_file)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]Error:[/] {e}")
+        raise typer.Exit(code=1) from e
+    except Exception as e:
+        console.print(f"[red]Validation error:[/] {e}")
+        raise typer.Exit(code=1) from e
+
+    console.print(f"[bold]Re-running phase:[/] {phase}")
+
+    try:
+        from recon.providers.llm import create_llm
+        from recon.providers.search import create_search_tools
+
+        llm = create_llm(plan)
+        search_tools = create_search_tools(plan)
+
+        if phase == "investigation":
+            from recon.crews.investigation.crew import build_investigation_crew
+
+            Path(plan.research_dir).mkdir(parents=True, exist_ok=True)
+            investigations = plan.get_investigations()
+            crew = build_investigation_crew(
+                plan=plan,
+                investigations=investigations,
+                llm=llm,
+                search_tools=search_tools,
+                verbose=verbose,
+            )
+            crew.kickoff()
+            console.print(f"[green]Investigation complete.[/] Files in {plan.research_dir}/")
+
+        elif phase == "verification":
+            from recon.crews.verification.crew import build_verification_crew
+
+            Path(plan.verification_dir).mkdir(parents=True, exist_ok=True)
+            crew = build_verification_crew(
+                plan=plan,
+                llm=llm,
+                search_tools=search_tools,
+                research_dir=plan.research_dir,
+                verbose=verbose,
+            )
+            if crew is None:
+                console.print("[yellow]No research files to verify.[/]")
+                raise typer.Exit(code=0)
+            crew.kickoff()
+            console.print(
+                f"[green]Verification complete.[/] Report: {plan.verification_dir}/report.md"
+            )
+
+        elif phase == "synthesis":
+            from recon.crews.synthesis.crew import build_synthesis_crew
+
+            Path(plan.output_dir).mkdir(parents=True, exist_ok=True)
+            crew = build_synthesis_crew(
+                plan=plan,
+                llm=llm,
+                research_dir=plan.research_dir,
+                verification_dir=plan.verification_dir if plan.verify else None,
+                verbose=verbose,
+            )
+            crew.kickoff()
+            console.print(
+                f"[green]Synthesis complete.[/] Report: {plan.output_dir}/final-report.md"
+            )
+
+    except Exception as e:
+        console.print(f"\n[red]Phase '{phase}' failed:[/] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(code=4) from e
 
 
 def version_callback(value: bool) -> None:

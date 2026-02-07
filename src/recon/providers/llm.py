@@ -19,7 +19,7 @@ PROVIDER_BASE_URLS: dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
     "groq": "https://api.groq.com/openai/v1",
-    "kimi": "https://platform.moonshot.ai/v1",
+    "kimi": "https://api.moonshot.ai/v1",
     "ollama": "http://localhost:11434/v1",
 }
 

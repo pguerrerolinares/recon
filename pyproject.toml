@@ -25,6 +25,7 @@ classifiers = [
 
 dependencies = [
     "crewai[tools]>=1.9",
+    "tavily-python>=0.5",
     "typer>=0.12",
     "rich>=13.0",
     "pydantic>=2.0",
@@ -44,8 +45,17 @@ dev = [
     "pyright>=1.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/paulofcardoso/recon"
+Repository = "https://github.com/paulofcardoso/recon"
+Issues = "https://github.com/paulofcardoso/recon/issues"
+Changelog = "https://github.com/paulofcardoso/recon/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+recon = ["templates/*.yaml", "py.typed"]
 
 [tool.ruff]
 target-version = "py312"
