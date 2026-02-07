@@ -1,0 +1,51 @@
+claim_extraction_task:
+  description: >
+    Read the input research documents and extract every factual claim that
+    includes: numbers, statistics, dates, company names, product names,
+    pricing, funding amounts, user counts, GitHub stars, or direct quotes.
+
+    Output a structured list of claims, each with:
+    - Claim ID (C1, C2, ...)
+    - Claim text
+    - Source document
+    - Type (statistic, pricing, attribution, date, quote)
+    - Cited source (if any)
+
+    Do NOT extract opinions, recommendations, or subjective assessments.
+  expected_output: >
+    A structured markdown list of factual claims with IDs, types, and
+    cited sources.
+  agent: fact_checker
+
+verification_task:
+  description: >
+    For each extracted claim, verify it:
+
+    1. If the claim cites a source URL: fetch that URL and check if it
+       contains the claimed information.
+    2. If no source cited: search for the specific data point.
+
+    Mark each claim:
+    - VERIFIED: Exact or very close match found in independent source
+    - PARTIALLY_VERIFIED: Related evidence but not exact match
+    - UNVERIFIABLE: No confirming or contradicting evidence found
+    - CONTRADICTED: Evidence directly contradicts the claim
+
+    Maximum {max_queries_per_claim} search queries per claim.
+  expected_output: >
+    A claim-by-claim verification with status marks and evidence URLs.
+  agent: fact_checker
+
+report_task:
+  description: >
+    Produce a verification report in markdown with:
+    - Summary: X verified, Y partially verified, Z unverifiable, W contradicted
+    - Reliability score per source document (percentage verified)
+    - Table of all claims with status and evidence URLs
+    - Detailed section for CONTRADICTED claims with correct information
+    - Overall confidence assessment
+  expected_output: >
+    A markdown verification report with claim-level status marks
+    (VERIFIED, PARTIALLY_VERIFIED, UNVERIFIABLE, CONTRADICTED),
+    source URLs, and reliability percentages.
+  agent: fact_checker

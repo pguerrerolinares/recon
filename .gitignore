@@ -28,9 +28,9 @@ Thumbs.db
 .env.local
 
 # Recon outputs (user-generated, not tracked)
-output/
-research/
-verification/
+/output/
+/research/
+/verification/
 
 # SQLite state
 *.db
