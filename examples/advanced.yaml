@@ -1,0 +1,60 @@
+# Advanced example: custom investigations with provider overrides.
+# Usage: recon run examples/advanced.yaml
+
+topic: "MCP (Model Context Protocol) ecosystem"
+focus: "Opportunities for developer tools and server implementations"
+
+provider: openrouter
+model: anthropic/claude-sonnet-4
+
+search:
+  provider: tavily
+
+context_strategy: auto
+
+output_dir: ./output
+research_dir: ./research
+verification_dir: ./verification
+
+investigations:
+  - id: protocol
+    name: "Protocol Analysis"
+    questions:
+      - "What is MCP and how does it work technically?"
+      - "What are the key protocol primitives (tools, resources, prompts)?"
+      - "How does it compare to alternatives like A2A?"
+    instructions: >
+      Reference the official MCP specification directly.
+      Include protocol version and transport details.
+
+  - id: servers
+    name: "Server Ecosystem"
+    questions:
+      - "What MCP servers exist and what do they do?"
+      - "Which have the most adoption? (GitHub stars, mentions)"
+      - "What categories of servers are missing?"
+    instructions: >
+      Check the official MCP server registry and GitHub.
+      Create a categorized table of existing servers.
+
+  - id: adoption
+    name: "Client Adoption"
+    questions:
+      - "Which AI tools support MCP as a client?"
+      - "What is the user experience like in each client?"
+      - "What limitations do current clients have?"
+    instructions: >
+      Check Claude Desktop, Cursor, VS Code, and other known
+      MCP clients. Note version requirements and setup friction.
+
+verification:
+  enabled: true
+  max_queries_per_claim: 3
+  max_fetches_per_claim: 2
+  timeout_per_fetch: 15
+
+synthesis:
+  instructions: >
+    Identify the top 5 opportunities in the MCP ecosystem.
+    Rank by feasibility for a solo developer. Include effort
+    estimates and potential user base for each opportunity.

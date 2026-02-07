@@ -1,0 +1,82 @@
+# Recon Template: Market Research
+# Usage: recon init --template market-research
+# Edit the topic and focus, then run: recon run plan.yaml
+
+topic: "YOUR TOPIC HERE"
+focus: "YOUR FOCUS AREA HERE"
+depth: deep
+verify: true
+
+provider: openrouter
+model: anthropic/claude-sonnet-4
+
+search:
+  provider: tavily
+
+investigations:
+  - id: landscape
+    name: "Market Landscape"
+    questions:
+      - "What is the current market size and growth rate?"
+      - "Who are the top 10 players and what is their market position?"
+      - "What business models are dominant?"
+      - "What recent funding or acquisitions happened (last 12 months)?"
+    instructions: >
+      Focus on VERIFIABLE data: revenue, user counts, funding amounts,
+      GitHub stars. Create comparison tables. Cite every number.
+
+  - id: competitors
+    name: "Competitor Deep Dive"
+    questions:
+      - "What are the top 10 existing solutions and what does each do?"
+      - "What are strengths and weaknesses of each?"
+      - "What do users complain about? (GitHub issues, Reddit, reviews)"
+      - "What pricing models do they use?"
+      - "What features are missing across all competitors?"
+    instructions: >
+      For each competitor, check GitHub (stars, issues, last commit),
+      official website (pricing, features), and user feedback.
+      Create a feature comparison matrix.
+
+  - id: trends
+    name: "Trends and Opportunities"
+    questions:
+      - "What are the major trends in the last 6-12 months?"
+      - "What technologies are gaining traction rapidly?"
+      - "What problems are currently unsolved or poorly solved?"
+      - "What are practitioners asking for in communities (Reddit, HN)?"
+    instructions: >
+      Distinguish genuine trends (backed by adoption data) from hype.
+      Cite specific community posts when referencing practitioner needs.
+
+  - id: business
+    name: "Business Models"
+    questions:
+      - "What monetization models work in this space?"
+      - "What revenue figures are publicly available?"
+      - "What is the typical path from OSS to revenue?"
+    instructions: >
+      Only cite verified revenue figures. Mark estimates as [ESTIMATED].
+      Include case studies with timeline and milestones.
+
+  - id: community
+    name: "Community Sentiment"
+    questions:
+      - "What are developers excited about?"
+      - "What are the biggest pain points and frustrations?"
+      - "What feature requests come up repeatedly?"
+    instructions: >
+      Search Reddit, Hacker News, GitHub issues, Twitter/X.
+      Quote actual users when possible. Note sentiment (positive/negative/neutral).
+
+verification:
+  enabled: true
+  max_queries_per_claim: 2
+  max_fetches_per_claim: 2
+
+synthesis:
+  instructions: >
+    Cross-reference all research documents. Use the verification report to
+    weight claims. Identify convergent findings. Produce a ranked list of
+    opportunities with evaluation criteria. For the top 3, provide concrete
+    action plans. Include a "what NOT to do" section.

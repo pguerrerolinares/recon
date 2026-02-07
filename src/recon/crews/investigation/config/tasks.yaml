@@ -1,0 +1,13 @@
+research_task:
+  description: >
+    Investigate the following questions about '{topic}':
+
+    {questions_text}
+
+    Produce a well-structured markdown document with findings,
+    data tables where relevant, and a Sources section at the end.
+    Mark any unverified claims as [UNVERIFIED].
+  expected_output: >
+    A comprehensive markdown research document with headers, tables,
+    cited sources, and [UNVERIFIED] markers where applicable.
+  agent: researcher

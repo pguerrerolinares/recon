@@ -1,0 +1,88 @@
+# Recon Template: Technical Landscape
+# Usage: recon init --template technical-landscape
+# Edit the topic and focus, then run: recon run plan.yaml
+
+topic: "YOUR TOPIC HERE"
+focus: "YOUR FOCUS AREA HERE"
+depth: deep
+verify: true
+
+provider: openrouter
+model: anthropic/claude-sonnet-4
+
+search:
+  provider: tavily
+
+investigations:
+  - id: frameworks
+    name: "Frameworks and Tools"
+    questions:
+      - "What are the major frameworks/tools in this space?"
+      - "What is the adoption level of each? (GitHub stars, downloads, usage)"
+      - "What are the key architectural differences between them?"
+      - "Which are actively maintained vs stagnating?"
+    instructions: >
+      Check GitHub repos directly for stars, recent commits, issue counts.
+      Check PyPI/npm download stats where applicable.
+      Create a comparison table with quantitative metrics.
+
+  - id: architecture
+    name: "Architecture Patterns"
+    questions:
+      - "What are the dominant architecture patterns?"
+      - "What are the trade-offs of each approach?"
+      - "What patterns are emerging as best practices?"
+      - "What anti-patterns have been identified by the community?"
+    instructions: >
+      Reference official documentation and architecture guides.
+      Include diagrams descriptions where helpful.
+      Cite specific technical blog posts and conference talks.
+
+  - id: standards
+    name: "Standards and Protocols"
+    questions:
+      - "What standards and protocols are relevant?"
+      - "What is the adoption status of each standard?"
+      - "Are there competing standards? Which is winning?"
+      - "What interoperability challenges exist?"
+    instructions: >
+      Check official standard specifications and RFCs.
+      Note which major players support which standards.
+      Assess maturity level (draft, adopted, widespread).
+
+  - id: ecosystem
+    name: "Ecosystem and Integrations"
+    questions:
+      - "What does the broader ecosystem look like?"
+      - "What integrations and plugins are available?"
+      - "What are the key infrastructure dependencies?"
+      - "What hosting/deployment options exist?"
+    instructions: >
+      Map the ecosystem relationships. Note which tools work
+      well together and which have integration friction.
+      Check marketplace/registry listings where applicable.
+
+  - id: future
+    name: "Future Directions"
+    questions:
+      - "What are the announced roadmaps of major players?"
+      - "What research papers are influencing the field?"
+      - "What shifts are likely in the next 12-24 months?"
+      - "What are the current limitations that are actively being worked on?"
+    instructions: >
+      Check official roadmaps, blog posts, and conference announcements.
+      Distinguish between confirmed plans and speculation.
+      Mark predictions as [PREDICTION] vs confirmed roadmap items.
+
+verification:
+  enabled: true
+  max_queries_per_claim: 2
+  max_fetches_per_claim: 2
+
+synthesis:
+  instructions: >
+    Map the technology landscape visually (describe the map in text).
+    Identify the most mature vs emerging technologies. Provide a
+    decision framework for choosing between alternatives based on
+    use case, team size, and constraints. Include a "technology radar"
+    categorization (adopt, trial, assess, hold).

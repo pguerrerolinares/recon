@@ -1,0 +1,11 @@
+# Simple example: research a topic with default settings.
+# Usage: recon run examples/simple.yaml
+
+topic: "AI agent frameworks and tooling in 2026"
+questions:
+  - "What frameworks exist and what is their adoption?"
+  - "What business models work in this space?"
+  - "What gaps and opportunities remain?"
+focus: "Open-source projects viable for a solo developer"
+depth: standard
+verify: true

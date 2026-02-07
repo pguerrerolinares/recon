@@ -1,0 +1,61 @@
+# Recon Template: Competitive Analysis
+# Usage: recon init --template competitive-analysis
+# Edit the topic and focus, then run: recon run plan.yaml
+
+topic: "YOUR TOPIC HERE"
+focus: "YOUR FOCUS AREA HERE"
+depth: standard
+verify: true
+
+provider: openrouter
+model: anthropic/claude-sonnet-4
+
+search:
+  provider: tavily
+
+investigations:
+  - id: features
+    name: "Feature Comparison"
+    questions:
+      - "What are the top competitors and what features does each offer?"
+      - "Create a feature comparison matrix across all competitors."
+      - "What unique selling points does each competitor have?"
+      - "What features are table stakes vs differentiators?"
+    instructions: >
+      Build a detailed feature comparison table. Check official docs,
+      pricing pages, and changelogs. Note feature gaps.
+
+  - id: positioning
+    name: "Market Positioning"
+    questions:
+      - "How does each competitor position itself? (tagline, target audience)"
+      - "What pricing tiers and models do they use?"
+      - "What is their go-to-market strategy?"
+      - "What are their strengths and weaknesses from user reviews?"
+    instructions: >
+      Check official websites, G2/Capterra reviews, ProductHunt launches.
+      Include pricing tables where available. Cite actual user quotes.
+
+  - id: technical
+    name: "Technical Assessment"
+    questions:
+      - "What technology stack does each competitor use?"
+      - "What are the technical limitations users report?"
+      - "How do they handle scalability, security, integrations?"
+      - "What is the development velocity? (commits, releases, contributors)"
+    instructions: >
+      For open-source competitors, check GitHub metrics directly.
+      For closed-source, rely on documentation and user reports.
+      Create a technical comparison table.
+
+verification:
+  enabled: true
+  max_queries_per_claim: 2
+  max_fetches_per_claim: 2
+
+synthesis:
+  instructions: >
+    Produce a competitive landscape map. Rank competitors by different
+    dimensions (features, pricing, developer experience, community).
+    Identify the most underserved segments and the biggest opportunities
+    for differentiation.

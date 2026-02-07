@@ -1,0 +1,20 @@
+# Verify-only example: minimal plan that just runs fact-checking.
+# Place your research files in ./research/ first, then run:
+# Usage: recon run examples/verify-only.yaml
+
+topic: "Existing research verification"
+depth: quick
+verify: true
+
+# Verification-focused settings
+verification:
+  enabled: true
+  max_queries_per_claim: 3
+  max_fetches_per_claim: 3
+  timeout_per_fetch: 15
+
+synthesis:
+  instructions: >
+    Focus the final report on verification results. Highlight
+    contradicted claims prominently. Produce a trustworthiness
+    score for each source document.

@@ -1,0 +1,90 @@
+# Recon Template: Opportunity Finder
+# Usage: recon init --template opportunity-finder
+# Edit the topic and focus, then run: recon run plan.yaml
+
+topic: "YOUR TOPIC HERE"
+focus: "YOUR FOCUS AREA HERE"
+depth: deep
+verify: true
+
+provider: openrouter
+model: anthropic/claude-sonnet-4
+
+search:
+  provider: tavily
+
+investigations:
+  - id: gaps
+    name: "Ecosystem Gaps"
+    questions:
+      - "What problems in this space are unsolved or poorly solved?"
+      - "What do users/developers consistently complain about?"
+      - "What workarounds are people using for missing features?"
+      - "What GitHub issues have the most thumbs-up but remain open?"
+    instructions: >
+      Search GitHub issues, Reddit, Hacker News, Stack Overflow.
+      Quote actual users. Quantify pain (number of upvotes, frequency
+      of complaints). Focus on gaps with real demand signals.
+
+  - id: ideas
+    name: "Project Ideas"
+    questions:
+      - "What specific products or tools could fill the identified gaps?"
+      - "What are at least 10 concrete project ideas with descriptions?"
+      - "For each idea, what is the approximate effort level?"
+      - "What existing projects attempted something similar and why did they fail?"
+    instructions: >
+      For each idea, check if something similar already exists.
+      If it does, explain why it's insufficient. Be specific about
+      the value proposition of each idea. Estimate scope (weekend
+      project, month, quarter).
+
+  - id: viability
+    name: "Viability Assessment"
+    questions:
+      - "Which ideas have the largest addressable market?"
+      - "Which are feasible for a solo developer or small team?"
+      - "What monetization options exist for each?"
+      - "What are the key risks and dependencies?"
+    instructions: >
+      Use verified data for market sizing where possible.
+      Check for existing competition and barriers to entry.
+      Assess technical feasibility honestly. Mark assumptions
+      as [ASSUMPTION].
+
+  - id: demand
+    name: "Demand Signals"
+    questions:
+      - "What search volume or trend data exists for these topics?"
+      - "What are people willing to pay for? (check existing pricing)"
+      - "What free tools have high adoption? (potential freemium conversion)"
+      - "What job postings mention these technologies?"
+    instructions: >
+      Check Google Trends where possible. Look for pricing pages
+      of related products. Check job boards for demand signals.
+      Distinguish between developer interest and business demand.
+
+  - id: playbook
+    name: "Execution Playbook"
+    questions:
+      - "What are the fastest paths to a working MVP for the top ideas?"
+      - "What tech stacks are recommended for each?"
+      - "What distribution channels work for this type of product?"
+      - "What are the first 3 steps for each top idea?"
+    instructions: >
+      Be concrete and actionable. Include specific tool
+      recommendations with reasoning. Reference successful
+      launches of similar projects for distribution strategy.
+
+verification:
+  enabled: true
+  max_queries_per_claim: 2
+  max_fetches_per_claim: 2
+
+synthesis:
+  instructions: >
+    Rank all identified opportunities using a scoring matrix with
+    criteria: market size, feasibility, competition level, monetization
+    potential, personal fit. For the top 3, provide detailed action
+    plans with week-by-week milestones. Include a "what NOT to build"
+    section with reasoning.
