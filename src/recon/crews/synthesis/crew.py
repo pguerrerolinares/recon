@@ -11,7 +11,7 @@ from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 
-from recon.config import ReconPlan
+from recon.config import ReconPlan  # noqa: TC001
 
 
 def build_synthesis_crew(

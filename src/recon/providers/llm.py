@@ -65,10 +65,7 @@ def get_api_key(provider: str) -> str:
     env_var = PROVIDER_API_KEY_ENV.get(provider, "RECON_API_KEY")
     key = os.environ.get(env_var, "")
     if not key and provider != "ollama":
-        msg = (
-            f"API key not found. Set {env_var} environment variable "
-            f"for provider '{provider}'."
-        )
+        msg = f"API key not found. Set {env_var} environment variable for provider '{provider}'."
         raise ValueError(msg)
     return key
 

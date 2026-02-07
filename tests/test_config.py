@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
+from pathlib import Path  # noqa: TC003
 
 import pytest
+import yaml
 
 from recon.config import (
     Depth,
@@ -162,7 +162,7 @@ class TestLoadPlan:
     def test_load_invalid_yaml(self, tmp_path: Path) -> None:
         bad_file = tmp_path / "bad.yaml"
         bad_file.write_text("not: a: valid: yaml: [[[")
-        with pytest.raises(Exception):
+        with pytest.raises((yaml.YAMLError, ValueError)):
             load_plan(bad_file)
 
     def test_load_non_mapping(self, tmp_path: Path) -> None:

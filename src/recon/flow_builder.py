@@ -1,22 +1,22 @@
-"""Flow builder - Translates a ReconPlan into a CrewAI execution pipeline.
+"""Flow builder - Translates a ReconPlan into an executable pipeline.
 
-This is the core bridge between Recon's simple YAML config and CrewAI's
-full agent/crew/flow API. The user writes a simple plan.yaml, and this
-module builds and runs the entire 3-phase pipeline:
+Provides two execution modes:
+1. build_and_run() - Simple function-based execution (used by CLI)
+2. ResearchFlow - Full CrewAI Flow with state persistence (advanced usage)
 
-1. Investigation (parallel researchers)
-2. Verification (fact-checker)
-3. Synthesis (director)
+Both modes execute the same 3-phase pipeline:
+Investigation (parallel) -> Verification (fact-checking) -> Synthesis (report)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from rich.console import Console
 
-from recon.config import ReconPlan
+from recon.callbacks.audit import AuditLogger
+from recon.callbacks.progress import ProgressTracker
+from recon.config import ReconPlan  # noqa: TC001
 from recon.crews.investigation.crew import build_investigation_crew
 from recon.crews.synthesis.crew import build_synthesis_crew
 from recon.crews.verification.crew import build_verification_crew
@@ -24,7 +24,11 @@ from recon.providers.llm import create_llm
 from recon.providers.search import create_search_tools
 
 
-def build_and_run(plan: ReconPlan, verbose: bool = False, console: Console | None = None) -> None:
+def build_and_run(
+    plan: ReconPlan,
+    verbose: bool = False,
+    console: Console | None = None,
+) -> None:
     """Build and execute the full 3-phase research pipeline.
 
     Args:
@@ -34,6 +38,9 @@ def build_and_run(plan: ReconPlan, verbose: bool = False, console: Console | Non
     """
     if console is None:
         console = Console()
+
+    progress = ProgressTracker(console=console)
+    audit = AuditLogger(output_dir=plan.output_dir)
 
     # Ensure output directories exist
     Path(plan.research_dir).mkdir(parents=True, exist_ok=True)
@@ -46,14 +53,15 @@ def build_and_run(plan: ReconPlan, verbose: bool = False, console: Console | Non
     search_tools = create_search_tools(plan)
     investigations = plan.get_investigations()
 
+    progress.pipeline_start(plan.topic)
+
     # --- Phase 1: Investigation ---
-    console.print("[bold cyan]Phase 1: Investigation[/] (parallel researchers)")
+    progress.phase_start("investigation")
+    audit.log_phase_start("investigation")
 
     for inv in investigations:
-        output_file = (
-            f"{plan.research_dir}/{inv.id}-{inv.name.lower().replace(' ', '-')}.md"
-        )
-        console.print(f"  [dim]Agent:[/] {inv.name} -> {output_file}")
+        output_file = f"{plan.research_dir}/{inv.id}-{inv.name.lower().replace(' ', '-')}.md"
+        progress.agent_start(inv.name, output_file)
 
     investigation_crew = build_investigation_crew(
         plan=plan,
@@ -63,17 +71,26 @@ def build_and_run(plan: ReconPlan, verbose: bool = False, console: Console | Non
         verbose=verbose,
     )
 
-    investigation_crew.kickoff()
+    try:
+        investigation_crew.kickoff()
+    except Exception as e:
+        progress.error("investigation", str(e))
+        audit.log_error("investigation", "investigation_crew", str(e))
+        raise
 
+    research_files = []
     for inv in investigations:
-        output_file = (
-            f"{plan.research_dir}/{inv.id}-{inv.name.lower().replace(' ', '-')}.md"
-        )
-        console.print(f"  [green]Done:[/] {output_file}")
+        output_file = f"{plan.research_dir}/{inv.id}-{inv.name.lower().replace(' ', '-')}.md"
+        progress.agent_end(inv.name, output_file)
+        research_files.append(output_file)
+
+    audit.log_phase_end("investigation", output_files=research_files)
 
     # --- Phase 2: Verification ---
+    verification_report = ""
     if plan.verify:
-        console.print("\n[bold cyan]Phase 2: Verification[/] (fact-checking)")
+        progress.phase_start("verification")
+        audit.log_phase_start("verification")
 
         verification_crew = build_verification_crew(
             plan=plan,
@@ -84,15 +101,23 @@ def build_and_run(plan: ReconPlan, verbose: bool = False, console: Console | Non
         )
 
         if verification_crew is not None:
-            verification_crew.kickoff()
-            console.print(f"  [green]Done:[/] {plan.verification_dir}/report.md")
+            try:
+                verification_crew.kickoff()
+                verification_report = f"{plan.verification_dir}/report.md"
+                progress.phase_end("verification", verification_report)
+                audit.log_phase_end("verification", output_files=[verification_report])
+            except Exception as e:
+                progress.error("verification", str(e))
+                audit.log_error("verification", "verification_crew", str(e))
+                console.print("[yellow]Continuing without verification...[/]")
         else:
-            console.print("  [yellow]No research files found. Skipping verification.[/]")
+            progress.phase_skip("verification", "no research files found")
     else:
-        console.print("\n[dim]Phase 2: Verification (skipped)[/]")
+        progress.phase_skip("verification", "disabled")
 
     # --- Phase 3: Synthesis ---
-    console.print("\n[bold cyan]Phase 3: Synthesis[/] (producing final report)")
+    progress.phase_start("synthesis")
+    audit.log_phase_start("synthesis")
 
     synthesis_crew = build_synthesis_crew(
         plan=plan,
@@ -102,5 +127,22 @@ def build_and_run(plan: ReconPlan, verbose: bool = False, console: Console | Non
         verbose=verbose,
     )
 
-    synthesis_crew.kickoff()
-    console.print(f"  [green]Done:[/] {plan.output_dir}/final-report.md")
+    try:
+        synthesis_crew.kickoff()
+    except Exception as e:
+        progress.error("synthesis", str(e))
+        audit.log_error("synthesis", "synthesis_crew", str(e))
+        raise
+
+    final_report = f"{plan.output_dir}/final-report.md"
+    progress.phase_end("synthesis", final_report)
+    audit.log_phase_end("synthesis", output_files=[final_report])
+
+    # --- Summary ---
+    progress.pipeline_end()
+    progress.summary(
+        plan_topic=plan.topic,
+        research_files=research_files,
+        verification_report=verification_report,
+        final_report=final_report,
+    )

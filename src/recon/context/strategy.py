@@ -7,10 +7,10 @@ decides which strategy to use and executes it.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 
-class Strategy(str, Enum):
+class Strategy(StrEnum):
     """Context management strategy."""
 
     DIRECT = "direct"  # Pass everything as-is

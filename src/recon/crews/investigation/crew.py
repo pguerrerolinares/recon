@@ -12,7 +12,7 @@ from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 
-from recon.config import Investigation, ReconPlan
+from recon.config import Investigation, ReconPlan  # noqa: TC001
 
 
 def build_investigation_crew(

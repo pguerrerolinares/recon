@@ -6,9 +6,8 @@ Built with Typer + Rich for a clean terminal experience.
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -16,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from recon import __version__
-from recon.config import Depth, load_plan, create_plan_from_topic
+from recon.config import create_plan_from_topic, load_plan
 
 app = typer.Typer(
     name="recon",
@@ -32,11 +31,11 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 @app.command()
 def run(
     plan_file: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Argument(help="Path to plan.yaml file"),
     ] = None,
     topic: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--topic", "-t", help="Research topic (inline mode)"),
     ] = None,
     depth: Annotated[
@@ -48,11 +47,11 @@ def run(
         typer.Option("--verify/--no-verify", help="Enable/disable fact-checking"),
     ] = True,
     provider: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--provider", "-p", help="LLM provider"),
     ] = None,
     model: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--model", "-m", help="Model name"),
     ] = None,
     verbose: Annotated[
@@ -153,7 +152,9 @@ def init(
 
     if not template_file.exists():
         console.print(f"[red]Error:[/] Template '{template}' not found.")
-        console.print(f"Available templates: {', '.join(t.stem for t in TEMPLATES_DIR.glob('*.yaml'))}")
+        console.print(
+            f"Available templates: {', '.join(t.stem for t in TEMPLATES_DIR.glob('*.yaml'))}"
+        )
         raise typer.Exit(code=1)
 
     if output.exists():
@@ -209,14 +210,48 @@ def verify(
 
     console.print(f"Found {len(md_files)} research files to verify.")
 
-    # TODO: Implement standalone verification (Week 3)
-    console.print("[yellow]Verification not yet implemented. Coming in v0.1.0.[/]")
+    output.mkdir(parents=True, exist_ok=True)
+
+    # Build a minimal plan for standalone verification
+    plan = create_plan_from_topic(
+        topic="Standalone verification",
+        verify=True,
+    )
+    plan.research_dir = str(research_dir)
+    plan.verification_dir = str(output)
+
+    try:
+        from recon.crews.verification.crew import build_verification_crew
+        from recon.providers.llm import create_llm
+        from recon.providers.search import create_search_tools
+
+        llm = create_llm(plan)
+        search_tools = create_search_tools(plan)
+
+        crew = build_verification_crew(
+            plan=plan,
+            llm=llm,
+            search_tools=search_tools,
+            research_dir=str(research_dir),
+        )
+
+        if crew is None:
+            console.print("[yellow]No claims found to verify.[/]")
+            raise typer.Exit(code=0)
+
+        console.print("[bold]Running verification...[/]")
+        crew.kickoff()
+        console.print(f"\n[green]Verification complete.[/] Report: {output}/report.md")
+
+    except Exception as e:
+        console.print(f"\n[red]Verification failed:[/] {e}")
+        raise typer.Exit(code=4) from e
 
 
 @app.command()
 def status(
     plan_file: Annotated[
-        Optional[Path],
+        Path | None,
         typer.Argument(help="Path to plan.yaml file"),
     ] = None,
 ) -> None:
@@ -250,7 +285,7 @@ def version_callback(value: bool) -> None:
 @app.callback()
 def main(
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option("--version", callback=version_callback, is_eager=True),
     ] = None,
 ) -> None:

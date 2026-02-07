@@ -7,15 +7,14 @@ parsing, validation, and default resolution.
 from __future__ import annotations
 
 import os
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
 
-class Depth(str, Enum):
+class Depth(StrEnum):
     """Research depth controls the number of parallel investigation agents."""
 
     QUICK = "quick"  # 1 researcher
@@ -38,13 +37,25 @@ DEFAULT_ANGLES = {
     Depth.STANDARD: [
         ("landscape", "Market Landscape", "Market size, key players, and ecosystem overview."),
         ("competitors", "Competitor Analysis", "Existing solutions, strengths, weaknesses, gaps."),
-        ("trends", "Trends and Opportunities", "Emerging trends, unsolved problems, community needs."),
+        (
+            "trends",
+            "Trends and Opportunities",
+            "Emerging trends, unsolved problems, community needs.",
+        ),
     ],
     Depth.DEEP: [
         ("landscape", "Market Landscape", "Market size, key players, and ecosystem overview."),
         ("competitors", "Competitor Analysis", "Existing solutions, strengths, weaknesses, gaps."),
-        ("trends", "Trends and Opportunities", "Emerging trends, unsolved problems, community needs."),
-        ("business", "Business Models", "Monetization patterns, revenue data, paths to profitability."),
+        (
+            "trends",
+            "Trends and Opportunities",
+            "Emerging trends, unsolved problems, community needs.",
+        ),
+        (
+            "business",
+            "Business Models",
+            "Monetization patterns, revenue data, paths to profitability.",
+        ),
         (
             "community",
             "Community Sentiment",
@@ -66,7 +77,7 @@ class Investigation(BaseModel):
     id: str
     name: str
     questions: list[str]
-    instructions: Optional[str] = None
+    instructions: str | None = None
 
 
 class VerificationConfig(BaseModel):
@@ -81,7 +92,7 @@ class VerificationConfig(BaseModel):
 class SynthesisConfig(BaseModel):
     """Synthesis phase configuration."""
 
-    instructions: Optional[str] = None
+    instructions: str | None = None
 
 
 class ReconPlan(BaseModel):
@@ -96,8 +107,8 @@ class ReconPlan(BaseModel):
     topic: str
 
     # Optional fields with smart defaults
-    questions: Optional[list[str]] = None
-    focus: Optional[str] = None
+    questions: list[str] | None = None
+    focus: str | None = None
     depth: Depth = Depth.STANDARD
     verify: bool = True
 
@@ -113,14 +124,14 @@ class ReconPlan(BaseModel):
     verification_dir: str = "./verification"
 
     # Extended mode: custom investigations
-    investigations: Optional[list[Investigation]] = None
+    investigations: list[Investigation] | None = None
 
     # Phase configs
     verification: VerificationConfig = VerificationConfig()
     synthesis: SynthesisConfig = SynthesisConfig()
 
     @model_validator(mode="after")
-    def sync_verify_flag(self) -> "ReconPlan":
+    def sync_verify_flag(self) -> ReconPlan:
         """Keep verify flag and verification.enabled in sync."""
         if not self.verify:
             self.verification.enabled = False
