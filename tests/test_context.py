@@ -27,27 +27,29 @@ class TestChooseStrategy:
         inputs = ["Short document."]
         assert choose_strategy(inputs, model_context_window=128_000) == Strategy.DIRECT
 
-    def test_medium_input_is_summarize(self) -> None:
-        # Create input that's between 0.8x and 3x the context window
+    def test_large_input_is_truncate(self) -> None:
+        # Create input that exceeds 0.8x the context window
         # 128K tokens * 4 chars/token * 0.9 = ~460K chars
         big_text = "x" * 460_000
-        assert choose_strategy([big_text], model_context_window=128_000) == Strategy.SUMMARIZE
+        assert choose_strategy([big_text], model_context_window=128_000) == Strategy.TRUNCATE
 
-    def test_huge_input_is_map_reduce(self) -> None:
-        # Create input that's > 3x the context window
-        # 128K * 4 * 3.5 = ~1.8M chars
+    def test_huge_input_is_truncate(self) -> None:
+        # Even very large inputs get TRUNCATE (no map_reduce yet)
         huge_text = "x" * 1_800_000
-        assert choose_strategy([huge_text], model_context_window=128_000) == Strategy.MAP_REDUCE
+        assert choose_strategy([huge_text], model_context_window=128_000) == Strategy.TRUNCATE
 
     def test_override_direct(self) -> None:
         huge = "x" * 1_800_000
         assert choose_strategy([huge], override="direct") == Strategy.DIRECT
 
-    def test_override_summarize(self) -> None:
-        assert choose_strategy(["small"], override="summarize") == Strategy.SUMMARIZE
+    def test_override_truncate(self) -> None:
+        assert choose_strategy(["small"], override="truncate") == Strategy.TRUNCATE
 
-    def test_override_map_reduce(self) -> None:
-        assert choose_strategy(["small"], override="map_reduce") == Strategy.MAP_REDUCE
+    def test_legacy_override_summarize_maps_to_truncate(self) -> None:
+        assert choose_strategy(["small"], override="summarize") == Strategy.TRUNCATE
+
+    def test_legacy_override_map_reduce_maps_to_truncate(self) -> None:
+        assert choose_strategy(["small"], override="map_reduce") == Strategy.TRUNCATE
 
     def test_invalid_override_falls_to_auto(self) -> None:
         result = choose_strategy(["small"], override="invalid")

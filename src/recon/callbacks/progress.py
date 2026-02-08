@@ -35,7 +35,7 @@ class ProgressTracker:
     """Track and display pipeline progress using Rich Live.
 
     This is not a CrewAI callback class (those have a specific interface).
-    Instead, this is a helper used by flow_builder/ResearchFlow to
+    Instead, this is a helper used by flow_builder to
     display progress between and during crew executions.
 
     Uses Rich Live for real-time updates with spinners during active phases.

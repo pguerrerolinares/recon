@@ -110,12 +110,11 @@ def build_synthesis_crew(
 
     if strategy == Strategy.DIRECT:
         logger.debug("Context strategy: DIRECT (input fits within context window)")
-    elif strategy in (Strategy.SUMMARIZE, Strategy.MAP_REDUCE):
+    elif strategy == Strategy.TRUNCATE:
         logger.warning(
-            "Context strategy: %s -- input exceeds model context window. "
-            "Truncating input to fit. Full %s support planned for v0.2.",
-            strategy.value.upper(),
-            strategy.value,
+            "Context strategy: TRUNCATE -- input exceeds model context window. "
+            "Truncating input to fit. Consider using a model with a larger "
+            "context window or reducing investigation depth.",
         )
         all_input = _truncate_to_window(all_input, plan.model)
 

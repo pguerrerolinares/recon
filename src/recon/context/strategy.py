@@ -2,7 +2,10 @@
 
 When the synthesizer or verifier receives multiple research documents,
 the total token count may exceed the model's context window. This module
-decides which strategy to use and executes it.
+decides which strategy to use.
+
+Currently only DIRECT (fits) and TRUNCATE (too large, truncate to fit)
+are implemented. SUMMARIZE and MAP_REDUCE are planned for a future release.
 """
 
 from __future__ import annotations
@@ -14,8 +17,7 @@ class Strategy(StrEnum):
     """Context management strategy."""
 
     DIRECT = "direct"  # Pass everything as-is
-    SUMMARIZE = "summarize"  # Summarize each doc first
-    MAP_REDUCE = "map_reduce"  # Process each doc separately, then combine
+    TRUNCATE = "truncate"  # Truncate to fit (current fallback for large inputs)
 
 
 # Approximate tokens per character for different model families.
@@ -77,12 +79,12 @@ def choose_strategy(
     Returns:
         The chosen Strategy.
     """
-    # User override
+    # User override (accept legacy values 'summarize'/'map_reduce' as truncate)
     if override != "auto":
-        try:
-            return Strategy(override)
-        except ValueError:
-            pass  # Fall through to auto
+        if override == "direct":
+            return Strategy.DIRECT
+        if override in ("truncate", "summarize", "map_reduce"):
+            return Strategy.TRUNCATE
 
     total_text = "".join(inputs)
     total_tokens = count_tokens_approx(total_text) + PROMPT_OVERHEAD
@@ -90,10 +92,8 @@ def choose_strategy(
 
     if total_tokens < window * 0.8:
         return Strategy.DIRECT
-    elif total_tokens < window * 3:
-        return Strategy.SUMMARIZE
     else:
-        return Strategy.MAP_REDUCE
+        return Strategy.TRUNCATE
 
 
 # Default context windows for known model families (in tokens).

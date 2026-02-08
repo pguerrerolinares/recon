@@ -17,16 +17,18 @@ from typing import Any
 class AuditLogger:
     """Log agent actions to a JSON Lines audit file.
 
-    Each entry records: timestamp, phase, agent, action, input, output.
+    Each entry records: timestamp, run_id, phase, agent, action, detail, metadata.
     The audit log complements the SourceTracker tool (which tracks
     claim-level provenance) by providing pipeline-level provenance.
     """
 
-    def __init__(self, output_dir: str = "./output") -> None:
+    def __init__(self, output_dir: str = "./output", run_id: str = "") -> None:
         self.output_dir = output_dir
+        self.run_id = run_id
         self.log_path = Path(output_dir) / "audit-log.jsonl"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._entries: list[dict[str, Any]] = []
+        self._phase_starts: dict[str, datetime] = {}
 
     def log(
         self,
@@ -48,6 +50,7 @@ class AuditLogger:
         timestamp: Any = datetime.now(UTC).isoformat()
         entry: dict[str, Any] = {
             "timestamp": timestamp,
+            "run_id": self.run_id,
             "phase": phase,
             "agent": agent,
             "action": action,
@@ -63,15 +66,25 @@ class AuditLogger:
 
     def log_phase_start(self, phase: str) -> None:
         """Log the start of a pipeline phase."""
+        self._phase_starts[phase] = datetime.now(UTC)
         self.log(phase=phase, agent="pipeline", action="phase_start")
 
     def log_phase_end(self, phase: str, output_files: list[str] | None = None) -> None:
-        """Log the end of a pipeline phase."""
+        """Log the end of a pipeline phase with duration."""
+        duration: float | None = None
+        start = self._phase_starts.pop(phase, None)
+        if start:
+            duration = (datetime.now(UTC) - start).total_seconds()
+
+        meta: dict[str, Any] = {"output_files": output_files or []}
+        if duration is not None:
+            meta["duration_seconds"] = round(duration, 1)
+
         self.log(
             phase=phase,
             agent="pipeline",
             action="phase_end",
-            metadata={"output_files": output_files or []},
+            metadata=meta,
         )
 
     def log_agent_start(self, phase: str, agent_name: str) -> None:

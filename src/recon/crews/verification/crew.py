@@ -15,7 +15,7 @@ from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 
-from recon.config import ReconPlan  # noqa: TC001
+from recon.config import DEPTH_MAX_ITER, ReconPlan  # noqa: TC001
 from recon.tools.citation_verifier import CitationVerifierTool
 from recon.tools.claim_extractor import ClaimExtractorTool
 from recon.tools.confidence_scorer import ConfidenceScorerTool
@@ -113,7 +113,7 @@ def build_verification_crew(
         tools=all_tools,
         llm=llm,
         verbose=verbose,
-        max_iter=25,
+        max_iter=DEPTH_MAX_ITER[plan.depth],
     )
 
     output_file = str(Path(plan.verification_dir) / "report.md")

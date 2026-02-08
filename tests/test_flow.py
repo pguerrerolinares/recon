@@ -1,4 +1,4 @@
-"""Tests for recon.flow_builder and recon.flows.research_flow.
+"""Tests for recon.flow_builder.
 
 These tests mock CrewAI to avoid real API calls. They verify that:
 1. The flow builder creates correct crew configurations

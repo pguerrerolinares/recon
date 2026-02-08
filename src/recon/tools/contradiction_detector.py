@@ -217,15 +217,18 @@ class ContradictionDetectorTool(BaseTool):
         Returns:
             JSON string with contradiction detection result.
         """
-        try:
-            data = json.loads(input_data)
-        except (json.JSONDecodeError, TypeError):
+        from recon.tools._helpers import parse_tool_input
+
+        data, err = parse_tool_input(input_data)
+        if err:
             return json.dumps(
                 {
                     "status": "AMBIGUOUS",
                     "explanation": "Invalid input. Expected JSON with claim pairs.",
                 }
             )
+
+        assert data is not None  # guaranteed by parse_tool_input when err is None
 
         result = detect_contradiction(
             claim_a=data.get("claim_a", ""),

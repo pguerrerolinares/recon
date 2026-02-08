@@ -28,6 +28,14 @@ DEPTH_AGENT_COUNT = {
     Depth.DEEP: 5,
 }
 
+# Maximum CrewAI agent iterations per depth level.
+# Higher values give agents more tool-call rounds for thorough research.
+DEPTH_MAX_ITER: dict[Depth, int] = {
+    Depth.QUICK: 10,
+    Depth.STANDARD: 25,
+    Depth.DEEP: 40,
+}
+
 # Default investigation angles generated when user doesn't provide custom ones.
 # Maps depth -> list of (id, name, description) tuples.
 DEFAULT_ANGLES = {
@@ -78,6 +86,18 @@ class Investigation(BaseModel):
     name: str
     questions: list[str]
     instructions: str | None = None
+
+    def output_path(self, base_dir: str) -> str:
+        """Return the canonical output file path for this investigation.
+
+        Args:
+            base_dir: Research output directory.
+
+        Returns:
+            Path string like ``base_dir/landscape-market-landscape.md``.
+        """
+        slug = self.name.lower().replace(" ", "-")
+        return str(Path(base_dir) / f"{self.id}-{slug}.md")
 
 
 class VerificationConfig(BaseModel):
@@ -153,6 +173,9 @@ class ReconPlan(BaseModel):
     depth: Depth = Depth.STANDARD
     verify: bool = True
 
+    # Research options
+    auto_questions: bool = True  # Generate sub-questions per angle via LLM before investigation
+
     # Provider config
     provider: str = "openrouter"
     model: str = "anthropic/claude-sonnet-4"
@@ -209,18 +232,13 @@ class ReconPlan(BaseModel):
         return result
 
     def get_api_key(self) -> str:
-        """Resolve API key from environment variables based on provider."""
-        env_map = {
-            "openrouter": "OPENROUTER_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "gemini": "GEMINI_API_KEY",
-            "groq": "GROQ_API_KEY",
-            "kimi": "KIMI_API_KEY",
-            "copilot": "GITHUB_TOKEN",
-            "custom": "RECON_API_KEY",
-        }
-        env_var = env_map.get(self.provider, "RECON_API_KEY")
+        """Resolve API key from environment variables based on provider.
+
+        Uses the canonical mapping from ``providers.llm.PROVIDER_API_KEY_ENV``.
+        """
+        from recon.providers.llm import PROVIDER_API_KEY_ENV
+
+        env_var = PROVIDER_API_KEY_ENV.get(self.provider, "RECON_API_KEY")
         key = os.environ.get(env_var, "")
         if not key and self.provider != "ollama":
             msg = (
@@ -231,14 +249,13 @@ class ReconPlan(BaseModel):
         return key
 
     def get_search_api_key(self) -> str:
-        """Resolve search API key from environment variables."""
-        env_map = {
-            "tavily": "TAVILY_API_KEY",
-            "brave": "BRAVE_API_KEY",
-            "serper": "SERPER_API_KEY",
-            "exa": "EXA_API_KEY",
-        }
-        env_var = env_map.get(self.search.provider, "TAVILY_API_KEY")
+        """Resolve search API key from environment variables.
+
+        Uses the canonical mapping from ``providers.search.SEARCH_API_KEY_ENV``.
+        """
+        from recon.providers.search import SEARCH_API_KEY_ENV
+
+        env_var = SEARCH_API_KEY_ENV.get(self.search.provider, "TAVILY_API_KEY")
         key = os.environ.get(env_var, "")
         if not key:
             msg = (

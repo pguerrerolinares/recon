@@ -1,10 +1,6 @@
 """Flow builder - Translates a ReconPlan into an executable pipeline.
 
-Provides two execution modes:
-1. build_and_run() - Simple function-based execution (used by CLI)
-2. ResearchFlow - Full CrewAI Flow with state persistence (advanced usage)
-
-Both modes execute the same 3-phase pipeline:
+Executes the 3-phase pipeline:
 Investigation (parallel) -> Verification (fact-checking) -> Synthesis (report)
 
 Incremental mode (default): phases with existing output files are skipped.
@@ -17,9 +13,11 @@ When memory is enabled, the pipeline also:
 
 from __future__ import annotations
 
+import json
 import logging
 import signal
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 from rich.console import Console
@@ -189,6 +187,86 @@ def _ingest_to_memory(
         )
 
 
+def _write_run_manifest(
+    plan: ReconPlan,
+    run_id: str,
+    audit: AuditLogger,
+    research_files: list[str],
+    verification_report: str,
+    final_report: str,
+    sources_summary: dict,
+    pipeline_start: datetime,
+) -> None:
+    """Write a consolidated run manifest JSON file.
+
+    The manifest captures key metrics from the pipeline run, providing
+    a single-file summary useful for comparing runs and future migration
+    to a SQLite database.
+    """
+    total_duration = (datetime.now(UTC) - pipeline_start).total_seconds()
+
+    # Build phase metrics from audit entries
+    phase_metrics: dict[str, dict] = {}
+    for entry in audit.get_entries():
+        if entry.get("action") == "phase_end":
+            phase = entry["phase"]
+            meta = entry.get("metadata", {})
+            phase_metrics[phase] = {
+                "status": "done",
+                "duration_seconds": meta.get("duration_seconds"),
+                "output_files": meta.get("output_files", []),
+            }
+        elif entry.get("action") == "phase_skip":
+            phase_metrics[entry["phase"]] = {"status": "skipped"}
+        elif entry.get("action") == "error":
+            phase = entry["phase"]
+            if phase not in phase_metrics:
+                phase_metrics[phase] = {}
+            phase_metrics[phase]["status"] = "error"
+
+    # Enrich investigation metrics with source data
+    if "investigation" in phase_metrics:
+        phase_metrics["investigation"]["total_sources"] = sources_summary.get("total_urls", 0)
+        phase_metrics["investigation"]["unique_sources"] = sources_summary.get("unique_urls", 0)
+        phase_metrics["investigation"]["agents"] = len(research_files)
+
+    manifest = {
+        "run_id": run_id,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "plan": {
+            "topic": plan.topic,
+            "depth": plan.depth.value,
+            "model": plan.model,
+            "provider": plan.provider,
+            "verify": plan.verify,
+            "search_provider": plan.search.provider,
+            "auto_questions": plan.auto_questions,
+        },
+        "phases": phase_metrics,
+        "total_duration_seconds": round(total_duration, 1),
+        "output_files": {
+            "research": research_files,
+            "verification": verification_report,
+            "final_report": final_report,
+            "sources_json": f"{plan.research_dir}/sources.json",
+        },
+        "memory_enabled": plan.memory.enabled,
+    }
+
+    manifest_path = Path(plan.output_dir) / f"{run_id}.json"
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, indent=2)
+
+    audit.log(
+        phase="pipeline",
+        agent="manifest",
+        action="manifest_written",
+        detail=f"Run manifest: {manifest_path}",
+        metadata={"manifest_path": str(manifest_path)},
+    )
+    logger.info("Run manifest written to %s", manifest_path)
+
+
 def build_and_run(
     plan: ReconPlan,
     verbose: bool = False,
@@ -209,9 +287,9 @@ def build_and_run(
     if console is None:
         console = Console()
 
-    progress = ProgressTracker(console=console)
-    audit = AuditLogger(output_dir=plan.output_dir)
     run_id = f"run-{uuid.uuid4().hex[:8]}"
+    progress = ProgressTracker(console=console)
+    audit = AuditLogger(output_dir=plan.output_dir, run_id=run_id)
 
     # Ensure output directories exist
     Path(plan.research_dir).mkdir(parents=True, exist_ok=True)
@@ -256,10 +334,7 @@ def build_and_run(
             audit.log_phase_start("investigation")
 
             for inv in investigations:
-                output_file = (
-                    f"{plan.research_dir}/{inv.id}-{inv.name.lower().replace(' ', '-')}.md"
-                )
-                progress.agent_start(inv.name, output_file)
+                progress.agent_start(inv.name, inv.output_path(plan.research_dir))
 
             investigation_crew = build_investigation_crew(
                 plan=plan,
@@ -279,13 +354,30 @@ def build_and_run(
 
             research_files = []
             for inv in investigations:
-                output_file = (
-                    f"{plan.research_dir}/{inv.id}-{inv.name.lower().replace(' ', '-')}.md"
-                )
-                progress.agent_end(inv.name, output_file)
-                research_files.append(output_file)
+                out = inv.output_path(plan.research_dir)
+                progress.agent_end(inv.name, out)
+                research_files.append(out)
 
             audit.log_phase_end("investigation", output_files=research_files)
+
+        # Post-process: extract and deduplicate sources
+        from recon.tools.source_extractor import write_sources_json
+
+        sources_summary = write_sources_json(plan.research_dir)
+        audit.log(
+            phase="investigation",
+            agent="source_extractor",
+            action="sources_extracted",
+            detail=(
+                f"Extracted {sources_summary['unique_urls']} unique URLs "
+                f"({sources_summary['total_urls']} total) from research files"
+            ),
+            metadata={
+                "unique_urls": sources_summary["unique_urls"],
+                "total_urls": sources_summary["total_urls"],
+                "top_domains": dict(list(sources_summary["by_domain"].items())[:10]),
+            },
+        )
 
         # --- Phase 2: Verification ---
         verification_report = ""
@@ -317,7 +409,9 @@ def build_and_run(
                     try:
                         # Set alarm-based timeout (Unix only)
                         try:
-                            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+                            old_handler = signal.signal(  # type: ignore[assignment]
+                                signal.SIGALRM, _timeout_handler
+                            )
                             signal.alarm(timeout)
                             alarm_set = True
                         except (AttributeError, OSError):
@@ -411,4 +505,16 @@ def build_and_run(
         research_files=research_files,
         verification_report=verification_report,
         final_report=final_report,
+    )
+
+    # --- Run Manifest ---
+    _write_run_manifest(
+        plan=plan,
+        run_id=run_id,
+        audit=audit,
+        research_files=research_files,
+        verification_report=verification_report,
+        final_report=final_report,
+        sources_summary=sources_summary,
+        pipeline_start=progress.start_time,
     )

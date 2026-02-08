@@ -101,17 +101,30 @@ class ConfidenceScorerTool(BaseTool):
         Returns:
             JSON string with score and label.
         """
-        try:
-            data = json.loads(input_data)
-            status = data.get("verification_status", "UNVERIFIABLE")
-            count = int(data.get("source_count", 1))
-            primary = bool(data.get("has_primary_source", False))
-        except (json.JSONDecodeError, TypeError, ValueError):
+        from recon.tools._helpers import parse_tool_input
+
+        data, err = parse_tool_input(input_data)
+        if err:
             return json.dumps(
                 {
                     "score": 0.3,
                     "label": "LOW",
                     "error": "Could not parse input. Using default LOW confidence.",
+                }
+            )
+
+        assert data is not None  # guaranteed by parse_tool_input when err is None
+
+        try:
+            status = data.get("verification_status", "UNVERIFIABLE")
+            count = int(data.get("source_count", 1))
+            primary = bool(data.get("has_primary_source", False))
+        except (TypeError, ValueError):
+            return json.dumps(
+                {
+                    "score": 0.3,
+                    "label": "LOW",
+                    "error": "Invalid field values. Using default LOW confidence.",
                 }
             )
 

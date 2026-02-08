@@ -82,8 +82,6 @@ src/recon/
     audit.py            # JSONL pipeline audit logger
   context/
     strategy.py         # Token counting + context window management
-  flows/
-    research_flow.py    # CrewAI Flow with state (alternative to flow_builder)
   templates/            # 4 YAML plan templates
 tests/
   conftest.py           # Shared fixtures

@@ -66,6 +66,13 @@ def run(
         str | None,
         typer.Option("--memory", help="Path to .mv2 memory file for cross-run knowledge"),
     ] = None,
+    auto_questions: Annotated[
+        bool,
+        typer.Option(
+            "--auto-questions/--no-auto-questions",
+            help="Auto-generate sub-questions per investigation angle via LLM",
+        ),
+    ] = True,
     force: Annotated[
         bool,
         typer.Option("--force", "-f", help="Re-run all phases even if output files exist"),
@@ -99,6 +106,9 @@ def run(
     except Exception as e:
         console.print(f"[red]Validation error:[/] {e}")
         raise typer.Exit(code=1) from e
+
+    # Apply --auto-questions override
+    plan.auto_questions = auto_questions
 
     # Apply --memory override
     if memory:

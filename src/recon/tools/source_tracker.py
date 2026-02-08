@@ -120,14 +120,13 @@ class SourceTrackerTool(BaseTool):
         Returns:
             JSON string confirming the tracked entry.
         """
-        try:
-            data = json.loads(input_data)
-        except (json.JSONDecodeError, TypeError):
-            return json.dumps(
-                {
-                    "error": "Invalid input. Expected JSON with claim tracking data.",
-                }
-            )
+        from recon.tools._helpers import parse_tool_input
+
+        data, err = parse_tool_input(input_data)
+        if err:
+            return err
+
+        assert data is not None  # guaranteed by parse_tool_input when err is None
 
         entry = track_source(
             claim_id=data.get("claim_id", "unknown"),
