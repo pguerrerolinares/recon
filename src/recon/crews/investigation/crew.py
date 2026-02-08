@@ -89,9 +89,7 @@ def generate_sub_questions(
         lines = [line.strip().lstrip("-•0123456789.) ") for line in str(response).splitlines()]
         questions = [q for q in lines if q and len(q) > 10]
         if questions:
-            logger.info(
-                "Generated %d sub-questions for angle '%s'", len(questions), angle_name
-            )
+            logger.info("Generated %d sub-questions for angle '%s'", len(questions), angle_name)
             return questions
     except Exception:
         logger.warning(
