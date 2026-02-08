@@ -317,9 +317,7 @@ def build_and_run(
                     try:
                         # Set alarm-based timeout (Unix only)
                         try:
-                            old_handler = signal.signal(
-                                signal.SIGALRM, _timeout_handler
-                            )
+                            old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
                             signal.alarm(timeout)
                             alarm_set = True
                         except (AttributeError, OSError):
@@ -330,19 +328,15 @@ def build_and_run(
 
                         verification_report = f"{plan.verification_dir}/report.md"
                         progress.phase_end("verification", verification_report)
-                        audit.log_phase_end(
-                            "verification", output_files=[verification_report]
-                        )
+                        audit.log_phase_end("verification", output_files=[verification_report])
                     except _PhaseTimeoutError:
                         logger.warning(
-                            "Verification timed out after %ds, "
-                            "proceeding to synthesis",
+                            "Verification timed out after %ds, proceeding to synthesis",
                             timeout,
                         )
                         progress.error(
                             "verification",
-                            f"Timed out after {timeout}s. "
-                            "Proceeding to synthesis.",
+                            f"Timed out after {timeout}s. Proceeding to synthesis.",
                         )
                         audit.log_error(
                             "verification",
@@ -351,9 +345,7 @@ def build_and_run(
                         )
                     except Exception as e:
                         progress.error("verification", str(e))
-                        audit.log_error(
-                            "verification", "verification_crew", str(e)
-                        )
+                        audit.log_error("verification", "verification_crew", str(e))
                         # Verification failure is non-fatal.
                     finally:
                         # Restore original signal handler

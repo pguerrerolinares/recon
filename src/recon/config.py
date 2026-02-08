@@ -101,18 +101,14 @@ class VerificationConfig(BaseModel):
         default=40,
         ge=5,
         le=200,
-        description=(
-            "Maximum claims to verify. "
-            "Prioritized by type and source availability."
-        ),
+        description=("Maximum claims to verify. Prioritized by type and source availability."),
     )
     phase_timeout: int = Field(
         default=600,
         ge=60,
         le=3600,
         description=(
-            "Verification phase timeout in seconds. "
-            "On timeout, pipeline proceeds to synthesis."
+            "Verification phase timeout in seconds. On timeout, pipeline proceeds to synthesis."
         ),
     )
 

@@ -126,12 +126,10 @@ def build_synthesis_crew(
         "",
         "CORE RULES:",
         "1. Read ALL input documents before writing.",
-        "2. Cite which document supports each claim using "
-        "[Source: filename].",
+        "2. Cite which document supports each claim using [Source: filename].",
         "3. When documents contradict, note both positions.",
         "4. Prioritize claims marked VERIFIED in the verification report.",
-        "5. Do NOT rely on CONTRADICTED claims unless noting the "
-        "contradiction.",
+        "5. Do NOT rely on CONTRADICTED claims unless noting the contradiction.",
         "6. UNVERIFIABLE claims: Do NOT include in the main body of "
         "the report. Move them to a separate 'Appendix: Unverified "
         "Claims' section at the end. The reader must trust that "
@@ -139,10 +137,8 @@ def build_synthesis_crew(
         "7. PARTIALLY_VERIFIED claims: Include in the main body but "
         "clearly mark as 'Partially Verified' with a brief explanation "
         "of what was and was not confirmed.",
-        "8. Do not introduce new factual claims. Synthesize, do not "
-        "research.",
-        "9. Structure output for decision-making: takeaways, "
-        "recommendations, actions.",
+        "8. Do not introduce new factual claims. Synthesize, do not research.",
+        "9. Structure output for decision-making: takeaways, recommendations, actions.",
     ]
     if plan.synthesis.instructions:
         backstory_parts.append(f"\nAdditional instructions:\n{plan.synthesis.instructions}")
