@@ -62,6 +62,14 @@ def run(
         bool,
         typer.Option("--dry-run", help="Parse and validate plan without executing"),
     ] = False,
+    memory: Annotated[
+        str | None,
+        typer.Option("--memory", help="Path to .mv2 memory file for cross-run knowledge"),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", "-f", help="Re-run all phases even if output files exist"),
+    ] = False,
 ) -> None:
     """Run a research pipeline from a plan file or inline topic."""
     # Resolve plan
@@ -92,18 +100,27 @@ def run(
         console.print(f"[red]Validation error:[/] {e}")
         raise typer.Exit(code=1) from e
 
+    # Apply --memory override
+    if memory:
+        plan.memory.enabled = True
+        plan.memory.path = memory
+
     # Display plan summary
     investigations = plan.get_investigations()
 
+    mode_label = "full" if force else "incremental"
     panel_content = (
         f"[bold]Topic:[/] {plan.topic}\n"
         f"[bold]Depth:[/] {plan.depth.value} ({len(investigations)} researchers)\n"
         f"[bold]Model:[/] {plan.model} via {plan.provider}\n"
         f"[bold]Verify:[/] {'yes' if plan.verify else 'no'}\n"
-        f"[bold]Search:[/] {plan.search.provider}"
+        f"[bold]Search:[/] {plan.search.provider}\n"
+        f"[bold]Mode:[/] {mode_label}"
     )
     if plan.focus:
         panel_content += f"\n[bold]Focus:[/] {plan.focus}"
+    if plan.memory.enabled:
+        panel_content += f"\n[bold]Memory:[/] {plan.memory.path}"
 
     console.print(Panel(panel_content, title="Recon - Research Pipeline", border_style="blue"))
 
@@ -126,7 +143,7 @@ def run(
     try:
         from recon.flow_builder import build_and_run
 
-        build_and_run(plan, verbose=verbose, console=console)
+        build_and_run(plan, verbose=verbose, console=console, force=force)
     except Exception as e:
         console.print(f"\n[red]Pipeline failed:[/] {e}")
         if verbose:
@@ -416,6 +433,108 @@ def rerun(
         if verbose:
             console.print_exception()
         raise typer.Exit(code=4) from e
+
+
+# --- Memory subcommands ---
+
+memory_app = typer.Typer(
+    name="memory",
+    help="Manage cross-run knowledge memory (.mv2 files).",
+    no_args_is_help=True,
+)
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("stats")
+def memory_stats(
+    path: Annotated[
+        Path,
+        typer.Argument(help="Path to .mv2 memory file"),
+    ] = Path("./memory/recon.mv2"),
+) -> None:
+    """Show statistics about a memory file."""
+    if not path.exists():
+        console.print(f"[yellow]Memory file not found:[/] {path}")
+        console.print("Memory files are created during pipeline runs with --memory.")
+        raise typer.Exit(code=1)
+
+    try:
+        from recon.memory.store import MemoryStore
+
+        store = MemoryStore(path=str(path))
+        stats = store.stats()
+        store.close()
+
+        table = Table(title=f"Memory: {path}")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="white")
+
+        for key, value in stats.items():
+            table.add_row(str(key), str(value))
+
+        console.print(table)
+
+    except ImportError:
+        console.print(
+            "[red]Error:[/] memvid-sdk is required. "
+            "Install with: [bold]pip install recon-ai\\[memory][/]"
+        )
+        raise typer.Exit(code=1) from None
+    except Exception as e:
+        console.print(f"[red]Error reading memory:[/] {e}")
+        raise typer.Exit(code=1) from e
+
+
+@memory_app.command("query")
+def memory_query(
+    query: Annotated[
+        str,
+        typer.Argument(help="Search query"),
+    ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", "-p", help="Path to .mv2 memory file"),
+    ] = Path("./memory/recon.mv2"),
+    k: Annotated[
+        int,
+        typer.Option("--top", "-k", help="Number of results to return"),
+    ] = 5,
+) -> None:
+    """Search for prior research in a memory file."""
+    if not path.exists():
+        console.print(f"[yellow]Memory file not found:[/] {path}")
+        raise typer.Exit(code=1)
+
+    try:
+        from recon.memory.store import MemoryStore
+
+        store = MemoryStore(path=str(path))
+        results = store.query(topic=query, k=k)
+        store.close()
+
+        if not results:
+            console.print("[yellow]No results found.[/]")
+            raise typer.Exit(code=0)
+
+        for i, hit in enumerate(results, 1):
+            title = hit.get("title", "Untitled")
+            text = hit.get("text", "")
+            score = hit.get("score", 0.0)
+            snippet = text[:200] + "..." if len(text) > 200 else text
+            console.print(f"\n[bold cyan]{i}.[/] {title} [dim](score: {score:.2f})[/]")
+            console.print(f"   {snippet}")
+
+        console.print(f"\n[dim]{len(results)} results found.[/]")
+
+    except ImportError:
+        console.print(
+            "[red]Error:[/] memvid-sdk is required. "
+            "Install with: [bold]pip install recon-ai\\[memory][/]"
+        )
+        raise typer.Exit(code=1) from None
+    except Exception as e:
+        console.print(f"[red]Error querying memory:[/] {e}")
+        raise typer.Exit(code=1) from e
 
 
 def version_callback(value: bool) -> None:

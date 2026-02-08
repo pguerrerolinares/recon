@@ -148,14 +148,60 @@ def _find_cited_source(text: str, match_start: int) -> str | None:
     return None
 
 
-def extract_claims(document_path: str) -> list[Claim]:
+# Priority order for claim types: higher priority = verified first.
+# Statistics and attributions are most valuable to verify; quotes least.
+CLAIM_TYPE_PRIORITY: dict[str, int] = {
+    "statistic": 0,
+    "attribution": 1,
+    "date": 2,
+    "pricing": 3,
+    "quote": 4,
+}
+
+
+def _prioritize_claims(claims: list[Claim], max_claims: int) -> list[Claim]:
+    """Prioritize and cap the number of claims.
+
+    Priority rules:
+    1. Claims with a cited_source URL are always preferred (verifiable).
+    2. Sort by claim type priority
+       (statistics > attributions > dates > pricing > quotes).
+    3. Return at most max_claims.
+
+    Args:
+        claims: Full list of extracted claims.
+        max_claims: Maximum number of claims to return.
+
+    Returns:
+        Prioritized and capped list of claims, re-numbered.
+    """
+    if len(claims) <= max_claims:
+        return claims
+
+    def sort_key(c: Claim) -> tuple[int, int]:
+        has_source = 0 if c.cited_source else 1  # 0 = has source (higher priority)
+        type_rank = CLAIM_TYPE_PRIORITY.get(c.claim_type, 99)
+        return (has_source, type_rank)
+
+    sorted_claims = sorted(claims, key=sort_key)
+    selected = sorted_claims[:max_claims]
+
+    # Re-number claim IDs sequentially
+    for i, claim in enumerate(selected, 1):
+        claim.claim_id = f"C{i}"
+
+    return selected
+
+
+def extract_claims(document_path: str, max_claims: int = 0) -> list[Claim]:
     """Extract factual claims from a markdown file.
 
     Args:
         document_path: Path to the markdown file.
+        max_claims: Maximum number of claims to return. 0 means no limit.
 
     Returns:
-        List of Claim objects.
+        List of Claim objects, prioritized and capped if max_claims > 0.
     """
     path = Path(document_path)
     if not path.exists():
@@ -192,6 +238,9 @@ def extract_claims(document_path: str) -> list[Claim]:
                     )
                 )
 
+    if max_claims > 0:
+        claims = _prioritize_claims(claims, max_claims)
+
     return claims
 
 
@@ -208,6 +257,8 @@ class ClaimExtractorTool(BaseTool):
         "Returns a JSON list of claims with IDs, types, and cited sources."
     )
 
+    max_claims: int = 0  # 0 = no limit; set by verification crew from config
+
     def _run(self, document_path: str) -> str:
         """Extract claims from a markdown document.
 
@@ -217,6 +268,6 @@ class ClaimExtractorTool(BaseTool):
         Returns:
             JSON string with list of claim dicts.
         """
-        claims = extract_claims(document_path)
+        claims = extract_claims(document_path, max_claims=self.max_claims)
         result = [c.to_dict() for c in claims]
         return json.dumps(result, indent=2)

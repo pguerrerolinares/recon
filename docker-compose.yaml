@@ -6,9 +6,12 @@ services:
       - ./output:/workspace/output
       - ./research:/workspace/research
       - ./verification:/workspace/verification
+      - ./memory:/workspace/memory
+    env_file:
+      - .env
     environment:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - TAVILY_API_KEY=${TAVILY_API_KEY}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
@@ -17,4 +20,4 @@ services:
       - RECON_API_KEY=${RECON_API_KEY:-}
       - RECON_BASE_URL=${RECON_BASE_URL:-}
     working_dir: /workspace
-    command: ["run", "plans/plan.yaml"]
+    command: ["run", "plans/plan.yaml", "--verbose"]

@@ -47,26 +47,21 @@ def build_verification_crew(
     Returns:
         A configured CrewAI Crew, or None if no research files found.
     """
-    # Collect research files
+    # Collect research file paths (content is read by tools, not inlined)
     research_path = Path(research_dir)
     research_files = sorted(research_path.glob("*.md"))
 
     if not research_files:
         return None
 
-    # Read all research content
-    research_content_parts = []
-    file_paths_text = []
-    for f in research_files:
-        content = f.read_text()
-        research_content_parts.append(f"## Document: {f.name}\n\n{content}")
-        file_paths_text.append(str(f))
-
+    file_paths_text = [str(f) for f in research_files]
     files_list = "\n".join(f"- {p}" for p in file_paths_text)
+
+    max_claims = plan.verification.max_claims
 
     # Custom verification tools
     verification_tools: list[Any] = [
-        ClaimExtractorTool(),
+        ClaimExtractorTool(max_claims=max_claims),
         CitationVerifierTool(timeout=plan.verification.timeout_per_fetch),
         ConfidenceScorerTool(),
         SourceTrackerTool(output_dir=plan.verification_dir),
@@ -76,23 +71,30 @@ def build_verification_crew(
     # Combine custom tools with search tools
     all_tools = verification_tools + search_tools
 
-    # Build the verification agent
+    # Build the verification agent with budget-aware instructions
     verifier = Agent(
         role="Fact Checker",
-        goal="Verify every factual claim in the research documents.",
+        goal=(
+            f"Verify the top {max_claims} factual claims extracted from the research documents. "
+            "Work efficiently within your budget -- prioritize claims with cited URLs."
+        ),
         backstory=(
             "You are a fact-checking agent. Your job is to verify factual claims "
             "in research documents by cross-referencing them with independent sources.\n\n"
-            "CORE RULES:\n"
-            "1. Use the claim_extractor tool to identify verifiable claims "
-            "from each research file.\n"
-            "2. For each claim with a cited URL, use citation_verifier "
-            "to check the source.\n"
-            "3. For claims without sources, use web search to find "
-            "confirming/contradicting evidence.\n"
-            "4. Use confidence_scorer to assign a score to each verified claim.\n"
-            "5. Use source_tracker to log every verification in the audit trail.\n"
-            "6. Use contradiction_detector when the same fact appears in multiple documents.\n"
+            f"BUDGET: You have a maximum of {max_claims} claims to verify. "
+            "The claim_extractor tool already prioritizes and caps claims for you.\n\n"
+            "EFFICIENCY RULES:\n"
+            "1. Use the claim_extractor tool on each research file. It returns "
+            f"at most {max_claims} prioritized claims (statistics first, then attributions, "
+            "dates, pricing, quotes -- claims with cited URLs are preferred).\n"
+            "2. For claims WITH a cited URL: use citation_verifier to check the source. "
+            "This is fast and does not use LLM calls.\n"
+            "3. For claims WITHOUT a cited URL: use 1 web search query maximum. "
+            "If the search does not confirm the claim, mark it UNVERIFIABLE and move on.\n"
+            "4. IMPORTANT: If you have spent 3+ tool calls on a single claim without "
+            "resolution, mark it UNVERIFIABLE and move to the next claim.\n"
+            "5. Use confidence_scorer to assign a score to each verified claim.\n"
+            "6. Use source_tracker to log every verification in the audit trail.\n"
             "7. Mark each claim as: VERIFIED, PARTIALLY_VERIFIED, UNVERIFIABLE, or CONTRADICTED.\n"
             "8. For CONTRADICTED claims, provide the correct information with source.\n"
             "9. Do NOT verify opinions or subjective assessments.\n"
@@ -101,14 +103,17 @@ def build_verification_crew(
             "as LOW CONFIDENCE in the report.\n"
             + (
                 "12. Flag claims that lack a primary source (official website, GitHub repo, "
-                "official docs) -- require_primary_source is enabled."
+                "official docs) -- require_primary_source is enabled.\n"
                 if plan.verification.require_primary_source
-                else "12. Primary source citations are recommended but not required."
+                else "12. Primary source citations are recommended but not required.\n"
             )
+            + "13. Do NOT use contradiction_detector during individual claim verification. "
+            "It will be used in the final summary step to check cross-document consistency."
         ),
         tools=all_tools,
         llm=llm,
         verbose=verbose,
+        max_iter=25,
     )
 
     output_file = str(Path(plan.verification_dir) / "report.md")
@@ -116,30 +121,33 @@ def build_verification_crew(
     # Task 1: Extract claims
     extract_task = Task(
         description=(
-            "Extract all verifiable factual claims from the research documents.\n\n"
+            "Extract verifiable factual claims from the research documents.\n\n"
             f"Research files:\n{files_list}\n\n"
             "Use the claim_extractor tool on each file to get structured claims. "
+            f"The tool is configured to return at most {max_claims} prioritized claims per file "
+            "(statistics and claims with cited URLs are prioritized). "
             "Combine all claims into a single list with document attribution."
         ),
         expected_output=(
-            "A structured list of all factual claims with IDs, types, "
+            "A structured list of factual claims with IDs, types, "
             "source documents, and cited sources."
         ),
         agent=verifier,
     )
 
-    # Task 2: Verify claims
+    # Task 2: Verify claims (no contradiction_detector here -- that's in Task 3)
     verify_task = Task(
         description=(
-            "Verify each extracted claim:\n\n"
-            "1. For claims with cited URLs: use citation_verifier to check the source.\n"
-            "2. For claims without sources: search for the specific data point.\n"
-            "3. Use contradiction_detector to compare claims about the same topic "
-            "from different documents.\n"
-            "4. Use confidence_scorer to assign a score to each claim.\n"
-            "5. Use source_tracker to log every verification result.\n\n"
+            "Verify each extracted claim efficiently:\n\n"
+            "1. For claims WITH a cited URL: use citation_verifier. This is fast.\n"
+            "2. For claims WITHOUT a URL: use 1 web search max. "
+            "If not confirmed, mark UNVERIFIABLE.\n"
+            "3. Use confidence_scorer to assign a score to each claim.\n"
+            "4. Use source_tracker to log every verification result.\n"
+            "5. If 3+ tool calls on one claim without resolution: mark UNVERIFIABLE, move on.\n\n"
             f"Maximum {plan.verification.max_queries_per_claim} search queries per claim.\n"
-            f"Maximum {plan.verification.max_fetches_per_claim} URL fetches per claim."
+            f"Maximum {plan.verification.max_fetches_per_claim} URL fetches per claim.\n\n"
+            "Do NOT use contradiction_detector here -- it will be used in the report step."
         ),
         expected_output=(
             "A claim-by-claim verification with status marks "
@@ -150,19 +158,23 @@ def build_verification_crew(
         context=[extract_task],
     )
 
-    # Task 3: Produce report
+    # Task 3: Cross-document consistency + final report
     report_task = Task(
         description=(
-            "Produce the final verification report in markdown with:\n"
+            "First, use contradiction_detector to check claims about the same topic "
+            "across different documents for cross-document consistency.\n\n"
+            "Then produce the final verification report in markdown with:\n"
             "- Summary: count of verified/partially/unverifiable/contradicted claims\n"
             "- Reliability score per source document (percentage verified)\n"
             "- Table of all claims with: ID, claim text, status, confidence score, evidence URL\n"
+            "- Cross-document consistency section (contradictions found between documents)\n"
             "- Detailed section for any CONTRADICTED claims with correct information\n"
             "- Overall confidence assessment\n"
         ),
         expected_output=(
             "A markdown verification report with claim-level status marks, "
-            "source URLs, confidence scores, and reliability percentages."
+            "source URLs, confidence scores, reliability percentages, "
+            "and cross-document consistency analysis."
         ),
         agent=verifier,
         context=[verify_task],

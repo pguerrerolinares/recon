@@ -270,3 +270,227 @@ class TestFlowBuilder:
 
         # Synthesis should still run
         mock_syn.kickoff.assert_called_once()
+
+
+class TestIncrementalSkip:
+    """Test incremental pipeline mode (auto-skip phases with existing output)."""
+
+    @patch("recon.flow_builder.create_search_tools")
+    @patch("recon.flow_builder.create_llm")
+    @patch("recon.flow_builder.build_synthesis_crew")
+    @patch("recon.flow_builder.build_verification_crew")
+    @patch("recon.flow_builder.build_investigation_crew")
+    def test_skip_investigation_when_files_exist(
+        self,
+        mock_inv_crew: MagicMock,
+        mock_ver_crew: MagicMock,
+        mock_syn_crew: MagicMock,
+        mock_llm: MagicMock,
+        mock_search: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Investigation should be skipped when research files already exist."""
+        from recon.flow_builder import build_and_run
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "general-overview.md").write_text("# Existing research\nContent here.\n")
+
+        plan = ReconPlan(
+            topic="Test",
+            depth=Depth.QUICK,
+            verify=False,
+            research_dir=str(research_dir),
+            output_dir=str(tmp_path / "output"),
+            verification_dir=str(tmp_path / "verification"),
+        )
+
+        mock_syn = MagicMock()
+        mock_syn.kickoff.return_value = "done"
+        mock_syn_crew.return_value = mock_syn
+
+        mock_llm.return_value = MagicMock()
+        mock_search.return_value = [MagicMock()]
+
+        build_and_run(plan, verbose=False)
+
+        # Investigation should NOT have been called
+        mock_inv_crew.assert_not_called()
+        # Synthesis should still run
+        mock_syn.kickoff.assert_called_once()
+
+    @patch("recon.flow_builder.create_search_tools")
+    @patch("recon.flow_builder.create_llm")
+    @patch("recon.flow_builder.build_synthesis_crew")
+    @patch("recon.flow_builder.build_verification_crew")
+    @patch("recon.flow_builder.build_investigation_crew")
+    def test_force_reruns_investigation(
+        self,
+        mock_inv_crew: MagicMock,
+        mock_ver_crew: MagicMock,
+        mock_syn_crew: MagicMock,
+        mock_llm: MagicMock,
+        mock_search: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """With force=True, investigation should run even if files exist."""
+        from recon.flow_builder import build_and_run
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "general-overview.md").write_text("# Existing research\nContent.\n")
+
+        plan = ReconPlan(
+            topic="Test",
+            depth=Depth.QUICK,
+            verify=False,
+            research_dir=str(research_dir),
+            output_dir=str(tmp_path / "output"),
+            verification_dir=str(tmp_path / "verification"),
+        )
+
+        mock_inv = MagicMock()
+        mock_inv.kickoff.return_value = "done"
+        mock_inv_crew.return_value = mock_inv
+
+        mock_syn = MagicMock()
+        mock_syn.kickoff.return_value = "done"
+        mock_syn_crew.return_value = mock_syn
+
+        mock_llm.return_value = MagicMock()
+        mock_search.return_value = [MagicMock()]
+
+        build_and_run(plan, verbose=False, force=True)
+
+        # Investigation SHOULD have been called despite existing files
+        mock_inv_crew.assert_called_once()
+        mock_inv.kickoff.assert_called_once()
+
+    @patch("recon.flow_builder.create_search_tools")
+    @patch("recon.flow_builder.create_llm")
+    @patch("recon.flow_builder.build_synthesis_crew")
+    @patch("recon.flow_builder.build_verification_crew")
+    @patch("recon.flow_builder.build_investigation_crew")
+    def test_skip_verification_when_report_exists(
+        self,
+        mock_inv_crew: MagicMock,
+        mock_ver_crew: MagicMock,
+        mock_syn_crew: MagicMock,
+        mock_llm: MagicMock,
+        mock_search: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Verification should be skipped when report already exists."""
+        from recon.flow_builder import build_and_run
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "general-overview.md").write_text("# Research\nContent.\n")
+
+        verification_dir = tmp_path / "verification"
+        verification_dir.mkdir()
+        (verification_dir / "report.md").write_text("# Verification Report\nAll verified.\n")
+
+        plan = ReconPlan(
+            topic="Test",
+            depth=Depth.QUICK,
+            verify=True,
+            research_dir=str(research_dir),
+            output_dir=str(tmp_path / "output"),
+            verification_dir=str(verification_dir),
+        )
+
+        mock_syn = MagicMock()
+        mock_syn.kickoff.return_value = "done"
+        mock_syn_crew.return_value = mock_syn
+
+        mock_llm.return_value = MagicMock()
+        mock_search.return_value = [MagicMock()]
+
+        build_and_run(plan, verbose=False)
+
+        # Neither investigation nor verification should have been called
+        mock_inv_crew.assert_not_called()
+        mock_ver_crew.assert_not_called()
+        # Synthesis should still run
+        mock_syn.kickoff.assert_called_once()
+
+    @patch("recon.flow_builder.create_search_tools")
+    @patch("recon.flow_builder.create_llm")
+    @patch("recon.flow_builder.build_synthesis_crew")
+    @patch("recon.flow_builder.build_investigation_crew")
+    def test_skip_synthesis_when_report_exists(
+        self,
+        mock_inv_crew: MagicMock,
+        mock_syn_crew: MagicMock,
+        mock_llm: MagicMock,
+        mock_search: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Synthesis should be skipped when final report already exists."""
+        from recon.flow_builder import build_and_run
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "general-overview.md").write_text("# Research\nContent.\n")
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        (output_dir / "final-report.md").write_text("# Final Report\nDone.\n")
+
+        plan = ReconPlan(
+            topic="Test",
+            depth=Depth.QUICK,
+            verify=False,
+            research_dir=str(research_dir),
+            output_dir=str(output_dir),
+            verification_dir=str(tmp_path / "verification"),
+        )
+
+        mock_llm.return_value = MagicMock()
+        mock_search.return_value = [MagicMock()]
+
+        build_and_run(plan, verbose=False)
+
+        # Nothing should have been called -- all phases skipped
+        mock_inv_crew.assert_not_called()
+        mock_syn_crew.assert_not_called()
+
+
+class TestHasPhaseOutput:
+    """Test _has_phase_output helper."""
+
+    def test_nonexistent_directory(self) -> None:
+        from recon.flow_builder import _has_phase_output
+
+        assert _has_phase_output("/nonexistent/dir") == []
+
+    def test_empty_directory(self, tmp_path: Path) -> None:
+        from recon.flow_builder import _has_phase_output
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+        assert _has_phase_output(str(empty_dir)) == []
+
+    def test_directory_with_files(self, tmp_path: Path) -> None:
+        from recon.flow_builder import _has_phase_output
+
+        d = tmp_path / "research"
+        d.mkdir()
+        (d / "file1.md").write_text("content")
+        (d / "file2.md").write_text("content")
+        (d / "file3.txt").write_text("not markdown")
+
+        result = _has_phase_output(str(d))
+        assert len(result) == 2
+
+    def test_ignores_empty_files(self, tmp_path: Path) -> None:
+        from recon.flow_builder import _has_phase_output
+
+        d = tmp_path / "research"
+        d.mkdir()
+        (d / "empty.md").write_text("")
+        (d / "real.md").write_text("content")
+
+        result = _has_phase_output(str(d))
+        assert len(result) == 1

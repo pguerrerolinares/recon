@@ -19,7 +19,8 @@ Built on [CrewAI](https://crewai.com). No agent configuration needed.
 Requires **Python 3.12+**.
 
 ```bash
-pip install recon-ai
+pip install recon-ai                # core (no cross-run memory)
+pip install recon-ai[memory]        # with memvid cross-run knowledge
 ```
 
 ```bash
@@ -103,6 +104,7 @@ recon run plan.yaml --dry-run                # validate plan, don't execute
 recon run plan.yaml --no-verify              # skip verification phase
 recon run --topic "X" --depth deep           # quick | standard | deep
 recon run --topic "X" --provider anthropic --model claude-sonnet-4
+recon run plan.yaml --memory ./memory/recon.mv2  # cross-run knowledge
 ```
 
 ### `recon init`
@@ -151,6 +153,63 @@ Re-run a specific phase using an existing plan.
 recon rerun plan.yaml --phase verification   # re-run just verification
 recon rerun plan.yaml --phase synthesis      # re-generate the final report
 recon rerun plan.yaml --phase investigation  # re-run all researchers
+```
+
+### `recon memory`
+
+Manage cross-run knowledge memory files.
+
+```bash
+recon memory stats                               # show default memory stats
+recon memory stats ./memory/project.mv2          # custom memory file
+recon memory query "AI frameworks"               # search prior findings
+recon memory query "MCP tools" --top 10          # more results
+recon memory query "X" --path ./other/memory.mv2 # custom memory file
+```
+
+## Cross-Run Memory
+
+Recon can remember findings across pipeline runs using
+[memvid](https://github.com/memvid/memvid) -- a single-file knowledge store.
+When enabled, Recon:
+
+1. **Before investigation**: queries prior findings for relevant context
+2. **After synthesis**: ingests all research, verification, and final reports
+
+This means your second research run on a related topic starts with knowledge
+from previous runs, while still verifying everything independently.
+
+### Setup
+
+```bash
+pip install recon-ai[memory]
+```
+
+### Usage
+
+```bash
+# Enable with CLI flag
+recon run --topic "AI frameworks" --memory ./memory/recon.mv2
+
+# Or in plan.yaml
+```
+
+```yaml
+topic: "MCP ecosystem"
+memory:
+  enabled: true
+  path: ./memory/recon.mv2
+  embedding_provider: local   # local (free, offline) | openai
+```
+
+The `.mv2` file grows over time as you run more research. Each project
+directory gets its own memory file by default at `./memory/recon.mv2`.
+
+### Inspect memory
+
+```bash
+recon memory stats                     # frame count, size
+recon memory query "AI agent tools"    # search prior research
 ```
 
 ## Plan File Format

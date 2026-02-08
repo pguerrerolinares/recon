@@ -31,6 +31,8 @@ Thumbs.db
 /output/
 /research/
 /verification/
+/memory/
+/plans/
 
 # SQLite state
 *.db

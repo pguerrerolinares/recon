@@ -6,7 +6,12 @@ import json
 from pathlib import Path  # noqa: TC003
 
 from recon.tools.citation_verifier import CitationVerifierTool, verify_citation
-from recon.tools.claim_extractor import ClaimExtractorTool, extract_claims
+from recon.tools.claim_extractor import (
+    Claim,
+    ClaimExtractorTool,
+    _prioritize_claims,
+    extract_claims,
+)
 from recon.tools.confidence_scorer import (
     ConfidenceScorerTool,
     score_confidence,
@@ -94,6 +99,64 @@ class TestClaimExtractor:
         # Should not have duplicates
         assert len(texts) == len(set(texts))
 
+    def test_max_claims_cap(self, tmp_path: Path) -> None:
+        """extract_claims with max_claims should cap the output."""
+        doc = tmp_path / "many.md"
+        lines = [f"Revenue reached ${i}M in 2025.\n" for i in range(1, 51)]
+        doc.write_text("# Report\n\n" + "".join(lines))
+        all_claims = extract_claims(str(doc), max_claims=0)
+        capped_claims = extract_claims(str(doc), max_claims=10)
+        assert len(all_claims) > 10
+        assert len(capped_claims) == 10
+
+    def test_max_claims_no_cap_when_under_limit(self, tmp_path: Path) -> None:
+        doc = tmp_path / "few.md"
+        doc.write_text("# Report\n\nRevenue reached $10M in 2025.\n")
+        claims = extract_claims(str(doc), max_claims=100)
+        assert len(claims) >= 1  # should return all, not truncate
+
+    def test_max_claims_renumbers(self, tmp_path: Path) -> None:
+        """After prioritization, claim IDs should be renumbered sequentially."""
+        doc = tmp_path / "many.md"
+        lines = [f"Revenue reached ${i}M in 2025.\n" for i in range(1, 51)]
+        doc.write_text("# Report\n\n" + "".join(lines))
+        claims = extract_claims(str(doc), max_claims=5)
+        ids = [c.claim_id for c in claims]
+        assert ids == ["C1", "C2", "C3", "C4", "C5"]
+
+    def test_prioritize_prefers_claims_with_sources(self) -> None:
+        """Claims with cited_source should be prioritized over those without."""
+        claims = [
+            Claim("C1", "No source claim", "doc.md", "statistic", None),
+            Claim("C2", "Has source claim", "doc.md", "statistic", "https://example.com"),
+            Claim("C3", "Another no source", "doc.md", "date", None),
+        ]
+        result = _prioritize_claims(claims, max_claims=2)
+        assert len(result) == 2
+        # The claim with a source should come first
+        assert result[0].text == "Has source claim"
+
+    def test_prioritize_prefers_statistics_over_quotes(self) -> None:
+        """Statistics should rank higher than quotes."""
+        claims = [
+            Claim("C1", "A quote claim", "doc.md", "quote", None),
+            Claim("C2", "A stat claim", "doc.md", "statistic", None),
+            Claim("C3", "A date claim", "doc.md", "date", None),
+        ]
+        result = _prioritize_claims(claims, max_claims=2)
+        types = [c.claim_type for c in result]
+        assert "statistic" in types
+        assert "quote" not in types
+
+    def test_tool_max_claims_field(self, tmp_path: Path) -> None:
+        """ClaimExtractorTool should respect max_claims field."""
+        doc = tmp_path / "many.md"
+        lines = [f"Revenue reached ${i}M in 2025.\n" for i in range(1, 51)]
+        doc.write_text("# Report\n\n" + "".join(lines))
+        tool = ClaimExtractorTool(max_claims=5)
+        result = json.loads(tool._run(str(doc)))
+        assert len(result) == 5
+
 
 # --- CitationVerifier tests ---
 
@@ -129,6 +192,39 @@ class TestCitationVerifier:
         )
         parsed = json.loads(result)
         assert parsed["status"] in ("ERROR", "UNVERIFIABLE")
+
+    def test_per_domain_rate_limit_same_domain(self) -> None:
+        """Same domain should be rate-limited."""
+        import time
+
+        tool = CitationVerifierTool(timeout=3.0, domain_delay=0.3)
+        # First call to this domain -- records timestamp
+        tool._rate_limit("https://example.com/page1")
+        start = time.monotonic()
+        # Second call to same domain -- should sleep
+        tool._rate_limit("https://example.com/page2")
+        elapsed = time.monotonic() - start
+        assert elapsed >= 0.2  # Should have slept ~0.3s
+
+    def test_per_domain_rate_limit_different_domains(self) -> None:
+        """Different domains should NOT be rate-limited."""
+        import time
+
+        tool = CitationVerifierTool(timeout=3.0, domain_delay=1.0)
+        tool._rate_limit("https://example.com/page1")
+        start = time.monotonic()
+        # Different domain -- should not sleep
+        tool._rate_limit("https://other-domain.com/page1")
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.1  # Should be nearly instant
+
+    def test_domain_delay_replaces_fetch_delay(self) -> None:
+        """Tool should use domain_delay, not the old fetch_delay."""
+        tool = CitationVerifierTool(timeout=3.0, domain_delay=0.5)
+        assert hasattr(tool, "domain_delay")
+        assert tool.domain_delay == 0.5
+        # Old fetch_delay should not exist
+        assert not hasattr(tool, "fetch_delay")
 
 
 # --- ConfidenceScorer tests ---

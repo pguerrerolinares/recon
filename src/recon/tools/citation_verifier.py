@@ -5,6 +5,8 @@ information is present. Returns VERIFIED/CONTRADICTED/UNVERIFIABLE with
 an evidence excerpt.
 
 Uses httpx for fetching to avoid adding extra dependencies.
+Per-domain rate limiting avoids hitting the same host too frequently
+while allowing different domains to be fetched without delay.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from urllib.parse import urlparse
 
 import httpx
 from crewai.tools import BaseTool
@@ -25,8 +28,8 @@ MAX_RESPONSE_SIZE = 512 * 1024
 # Request timeout in seconds.
 REQUEST_TIMEOUT = 15.0
 
-# Delay between consecutive URL fetches (seconds).
-DEFAULT_FETCH_DELAY = 0.5
+# Minimum delay between fetches to the same domain (seconds).
+DEFAULT_DOMAIN_DELAY = 1.0
 
 
 def _normalize_text(text: str) -> str:
@@ -178,6 +181,8 @@ class CitationVerifierTool(BaseTool):
     """Verify that a cited URL actually contains the claimed information.
 
     Fetches the URL, extracts text, and checks for presence of key claim terms.
+    Uses per-domain rate limiting: only sleeps when hitting the same domain
+    within ``domain_delay`` seconds. Different domains are fetched immediately.
     """
 
     name: str = "citation_verifier"
@@ -189,10 +194,37 @@ class CitationVerifierTool(BaseTool):
     )
 
     timeout: float = Field(default=REQUEST_TIMEOUT, description="Request timeout in seconds")
-    fetch_delay: float = Field(
-        default=DEFAULT_FETCH_DELAY,
-        description="Delay in seconds between consecutive URL fetches to avoid rate limiting.",
+    domain_delay: float = Field(
+        default=DEFAULT_DOMAIN_DELAY,
+        description="Minimum delay in seconds between fetches to the same domain.",
     )
+
+    # Internal state: last fetch timestamp per domain.
+    # Using dict default_factory would conflict with Pydantic; we init in __init__.
+    _domain_last_fetch: dict[str, float] = {}
+
+    def model_post_init(self, __context: object) -> None:
+        """Initialize per-domain tracking after Pydantic model init."""
+        self._domain_last_fetch = {}
+
+    def _rate_limit(self, url: str) -> None:
+        """Sleep only if we've recently fetched from the same domain."""
+        try:
+            domain = urlparse(url).netloc.lower()
+        except Exception:
+            return
+
+        if not domain:
+            return
+
+        now = time.monotonic()
+        last = self._domain_last_fetch.get(domain, 0.0)
+        elapsed = now - last
+
+        if elapsed < self.domain_delay:
+            time.sleep(self.domain_delay - elapsed)
+
+        self._domain_last_fetch[domain] = time.monotonic()
 
     def _run(self, input_data: str) -> str:
         """Verify a citation.
@@ -223,9 +255,8 @@ class CitationVerifierTool(BaseTool):
                     }
                 )
 
-        # Rate limiting: delay before fetch to avoid triggering site blocks
-        if self.fetch_delay > 0:
-            time.sleep(self.fetch_delay)
+        # Per-domain rate limiting
+        self._rate_limit(url)
 
         result = verify_citation(url, claim, timeout=self.timeout)
         return json.dumps(result, indent=2)

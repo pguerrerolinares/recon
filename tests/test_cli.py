@@ -75,6 +75,26 @@ class TestRun:
         assert result.exit_code == 0
         assert "Dry run" in result.output
 
+    def test_run_dry_run_shows_incremental_mode(self, tmp_path: Path) -> None:
+        plan = tmp_path / "plan.yaml"
+        plan.write_text(
+            "topic: Test topic\nquestions:\n  - What is this?\ndepth: quick\nverify: false\n"
+        )
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
+            result = runner.invoke(app, ["run", str(plan), "--dry-run"])
+        assert result.exit_code == 0
+        assert "incremental" in result.output
+
+    def test_run_dry_run_force_shows_full_mode(self, tmp_path: Path) -> None:
+        plan = tmp_path / "plan.yaml"
+        plan.write_text(
+            "topic: Test topic\nquestions:\n  - What is this?\ndepth: quick\nverify: false\n"
+        )
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
+            result = runner.invoke(app, ["run", str(plan), "--dry-run", "--force"])
+        assert result.exit_code == 0
+        assert "full" in result.output
+
 
 class TestInit:
     def test_init_default_template(self, tmp_path: Path) -> None:

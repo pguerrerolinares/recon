@@ -6,6 +6,7 @@ from pathlib import Path  # noqa: TC003
 
 import pytest
 import yaml
+from pydantic import ValidationError
 
 from recon.config import (
     Depth,
@@ -75,6 +76,40 @@ class TestReconPlan:
         assert plan.verification.max_queries_per_claim == 5
         assert plan.verification.max_fetches_per_claim == 3
         assert plan.verification.timeout_per_fetch == 30
+
+    def test_verification_max_claims_default(self) -> None:
+        plan = ReconPlan(topic="test")
+        assert plan.verification.max_claims == 40
+
+    def test_verification_max_claims_custom(self) -> None:
+        plan = ReconPlan(
+            topic="test",
+            verification=VerificationConfig(max_claims=100),
+        )
+        assert plan.verification.max_claims == 100
+
+    def test_verification_max_claims_bounds(self) -> None:
+        with pytest.raises(ValidationError):
+            VerificationConfig(max_claims=3)  # below ge=5
+        with pytest.raises(ValidationError):
+            VerificationConfig(max_claims=201)  # above le=200
+
+    def test_verification_phase_timeout_default(self) -> None:
+        plan = ReconPlan(topic="test")
+        assert plan.verification.phase_timeout == 600
+
+    def test_verification_phase_timeout_custom(self) -> None:
+        plan = ReconPlan(
+            topic="test",
+            verification=VerificationConfig(phase_timeout=1200),
+        )
+        assert plan.verification.phase_timeout == 1200
+
+    def test_verification_phase_timeout_bounds(self) -> None:
+        with pytest.raises(ValidationError):
+            VerificationConfig(phase_timeout=30)  # below ge=60
+        with pytest.raises(ValidationError):
+            VerificationConfig(phase_timeout=7200)  # above le=3600
 
 
 class TestGetInvestigations:

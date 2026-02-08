@@ -6,8 +6,8 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src/ src/
 
-# Install the package (non-editable, production mode)
-RUN pip install --no-cache-dir .
+# Install the package with memory support (non-editable, production mode)
+RUN pip install --no-cache-dir ".[memory]"
 
 WORKDIR /workspace
 

@@ -121,18 +121,28 @@ def build_synthesis_crew(
 
     # Build synthesis instructions
     backstory_parts = [
-        "You are a synthesis agent. Read all research and verification data, "
-        "then produce a unified analysis with actionable insights.",
+        "You are a synthesis agent. Read all research and verification "
+        "data, then produce a unified analysis with actionable insights.",
         "",
         "CORE RULES:",
         "1. Read ALL input documents before writing.",
-        "2. Cite which document supports each claim using [Source: filename].",
+        "2. Cite which document supports each claim using "
+        "[Source: filename].",
         "3. When documents contradict, note both positions.",
         "4. Prioritize claims marked VERIFIED in the verification report.",
-        "5. Do NOT rely on CONTRADICTED claims unless noting the contradiction.",
-        "6. Treat UNVERIFIABLE claims with lower confidence.",
-        "7. Do not introduce new factual claims. Synthesize, do not research.",
-        "8. Structure output for decision-making: takeaways, recommendations, actions.",
+        "5. Do NOT rely on CONTRADICTED claims unless noting the "
+        "contradiction.",
+        "6. UNVERIFIABLE claims: Do NOT include in the main body of "
+        "the report. Move them to a separate 'Appendix: Unverified "
+        "Claims' section at the end. The reader must trust that "
+        "everything in the main report is backed by verified evidence.",
+        "7. PARTIALLY_VERIFIED claims: Include in the main body but "
+        "clearly mark as 'Partially Verified' with a brief explanation "
+        "of what was and was not confirmed.",
+        "8. Do not introduce new factual claims. Synthesize, do not "
+        "research.",
+        "9. Structure output for decision-making: takeaways, "
+        "recommendations, actions.",
     ]
     if plan.synthesis.instructions:
         backstory_parts.append(f"\nAdditional instructions:\n{plan.synthesis.instructions}")
@@ -149,20 +159,28 @@ def build_synthesis_crew(
 
     synthesis_task = Task(
         description=(
-            "Synthesize the following research and verification data into a "
-            f"final report about '{plan.topic}':\n\n"
+            "Synthesize the following research and verification data into "
+            f"a final report about '{plan.topic}':\n\n"
             f"{all_input}\n\n"
             "Produce a report with:\n"
-            "- Executive summary\n"
+            "- Executive summary with overall confidence assessment\n"
             "- Convergent findings (what all sources agree on)\n"
             "- Divergent findings (where sources disagree)\n"
             "- Detailed analysis by topic\n"
             "- Ranked recommendations\n"
-            "- Confidence assessment for each major finding"
+            "- Confidence assessment for each major finding\n\n"
+            "CRITICAL: Only include VERIFIED and PARTIALLY_VERIFIED "
+            "claims in the main analysis sections. For PARTIALLY_VERIFIED "
+            "claims, note what was and was not confirmed.\n\n"
+            "At the end, add an 'Appendix: Unverified Claims' section "
+            "listing all claims that could not be fact-checked. This "
+            "appendix is for researcher follow-up, not for the reader to "
+            "rely on."
         ),
         expected_output=(
-            "A comprehensive markdown report with executive summary, "
-            "analysis, recommendations, and confidence levels for each finding."
+            "A comprehensive markdown report where the main body "
+            "contains only verified findings, plus an appendix of "
+            "unverified claims for follow-up."
         ),
         agent=synthesizer,
         output_file=output_file,

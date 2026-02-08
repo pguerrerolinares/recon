@@ -97,6 +97,41 @@ class VerificationConfig(BaseModel):
         default=False,
         description="When True, flag claims that lack a primary source citation.",
     )
+    max_claims: int = Field(
+        default=40,
+        ge=5,
+        le=200,
+        description=(
+            "Maximum claims to verify. "
+            "Prioritized by type and source availability."
+        ),
+    )
+    phase_timeout: int = Field(
+        default=600,
+        ge=60,
+        le=3600,
+        description=(
+            "Verification phase timeout in seconds. "
+            "On timeout, pipeline proceeds to synthesis."
+        ),
+    )
+
+
+class MemoryConfig(BaseModel):
+    """Cross-run memory configuration (requires memvid-sdk)."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable cross-run knowledge persistence via memvid.",
+    )
+    path: str = Field(
+        default="./memory/recon.mv2",
+        description="Path to the .mv2 memory file.",
+    )
+    embedding_provider: str = Field(
+        default="local",
+        description="Embedding provider for memory indexing: local | openai.",
+    )
 
 
 class SynthesisConfig(BaseModel):
@@ -132,6 +167,7 @@ class ReconPlan(BaseModel):
     output_dir: str = "./output"
     research_dir: str = "./research"
     verification_dir: str = "./verification"
+    memory_dir: str = "./memory"
 
     # Extended mode: custom investigations
     investigations: list[Investigation] | None = None
@@ -139,6 +175,7 @@ class ReconPlan(BaseModel):
     # Phase configs
     verification: VerificationConfig = VerificationConfig()
     synthesis: SynthesisConfig = SynthesisConfig()
+    memory: MemoryConfig = MemoryConfig()
 
     @model_validator(mode="after")
     def sync_verify_flag(self) -> ReconPlan:
