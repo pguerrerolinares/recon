@@ -194,8 +194,11 @@ investigations:
     instructions: "Include free tier details."
 
 verification:
-  min_confidence: 0.6
-  require_primary_source: false
+  min_confidence: 0.6               # flag claims below this threshold (0.0-1.0)
+  require_primary_source: false      # flag claims without primary sources
+  max_queries_per_claim: 2           # max search queries per claim (1-10)
+  max_fetches_per_claim: 2           # max URL fetches per claim (1-10)
+  timeout_per_fetch: 10              # seconds per URL fetch (1-60)
 
 synthesis:
   instructions: "Rank databases by developer experience."

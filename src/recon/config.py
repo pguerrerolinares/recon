@@ -87,6 +87,16 @@ class VerificationConfig(BaseModel):
     max_queries_per_claim: int = Field(default=2, ge=1, le=10)
     max_fetches_per_claim: int = Field(default=2, ge=1, le=10)
     timeout_per_fetch: int = Field(default=10, ge=1, le=60)
+    min_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence score to consider a claim acceptable.",
+    )
+    require_primary_source: bool = Field(
+        default=False,
+        description="When True, flag claims that lack a primary source citation.",
+    )
 
 
 class SynthesisConfig(BaseModel):

@@ -1,8 +1,28 @@
 """Research Flow - CrewAI Flow with 3-phase pipeline and state persistence.
 
-This is the main orchestrator for Recon. It uses CrewAI's Flow API
-with @start/@listen decorators and Pydantic state for tracking
-progress across the investigation -> verification -> synthesis phases.
+Alternative orchestrator using CrewAI's native Flow API with @start/@listen
+decorators and Pydantic state for tracking progress across the 3 phases:
+investigation -> verification -> synthesis.
+
+NOTE: This module is intended for **programmatic / library usage** only.
+The CLI (``recon run``) uses ``flow_builder.build_and_run()`` instead,
+which provides Rich Live progress tracking and JSONL audit logging.
+
+If you are integrating Recon into your own Python application and want
+CrewAI-native state management, use this flow::
+
+    from recon.config import load_plan
+    from recon.flows.research_flow import ResearchFlow
+
+    plan = load_plan("plan.yaml")
+    flow = ResearchFlow(plan=plan, verbose=True)
+    flow.kickoff()
+    print(flow.state)
+
+Limitations compared to ``flow_builder``:
+- No Rich Live TUI progress display
+- No JSONL audit logging
+- No error recording in state (errors propagate as exceptions)
 """
 
 from __future__ import annotations
@@ -35,14 +55,25 @@ class ResearchState(BaseModel):
 class ResearchFlow(Flow[ResearchState]):
     """3-phase research pipeline as a CrewAI Flow.
 
+    This is the **library API** for running Recon pipelines programmatically.
+    The CLI uses ``flow_builder.build_and_run()`` instead, which adds Rich
+    Live progress tracking and JSONL audit logging on top of the same
+    underlying crew builders.
+
     Phases:
     1. Investigation - Parallel researcher agents produce research/*.md files
     2. Verification - Fact-checker verifies claims in research files
     3. Synthesis - Director produces the final report
 
-    Usage:
-        flow = ResearchFlow(plan=plan, verbose=False)
+    Usage::
+
+        from recon.config import load_plan
+        from recon.flows.research_flow import ResearchFlow
+
+        plan = load_plan("plan.yaml")
+        flow = ResearchFlow(plan=plan, verbose=True)
         flow.kickoff()
+        print(flow.state.final_report)
     """
 
     def __init__(

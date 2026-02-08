@@ -21,6 +21,7 @@ PROVIDER_BASE_URLS: dict[str, str] = {
     "groq": "https://api.groq.com/openai/v1",
     "kimi": "https://api.moonshot.ai/v1",
     "ollama": "http://localhost:11434/v1",
+    "copilot": "https://models.inference.ai.azure.com",
 }
 
 # Map from provider name to environment variable for the API key.

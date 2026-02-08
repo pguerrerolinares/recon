@@ -11,16 +11,22 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 import httpx
 from crewai.tools import BaseTool
 from pydantic import Field
+
+from recon import __version__
 
 # Maximum response size to process (512KB).
 MAX_RESPONSE_SIZE = 512 * 1024
 
 # Request timeout in seconds.
 REQUEST_TIMEOUT = 15.0
+
+# Delay between consecutive URL fetches (seconds).
+DEFAULT_FETCH_DELAY = 0.5
 
 
 def _normalize_text(text: str) -> str:
@@ -67,7 +73,7 @@ def _fetch_url_text(url: str, timeout: float = REQUEST_TIMEOUT) -> str | None:
         with httpx.Client(
             timeout=timeout,
             follow_redirects=True,
-            headers={"User-Agent": "Recon/0.1 (research verification tool)"},
+            headers={"User-Agent": f"Recon/{__version__} (research verification tool)"},
         ) as client:
             response = client.get(url)
             response.raise_for_status()
@@ -183,6 +189,10 @@ class CitationVerifierTool(BaseTool):
     )
 
     timeout: float = Field(default=REQUEST_TIMEOUT, description="Request timeout in seconds")
+    fetch_delay: float = Field(
+        default=DEFAULT_FETCH_DELAY,
+        description="Delay in seconds between consecutive URL fetches to avoid rate limiting.",
+    )
 
     def _run(self, input_data: str) -> str:
         """Verify a citation.
@@ -212,6 +222,10 @@ class CitationVerifierTool(BaseTool):
                         "url": "",
                     }
                 )
+
+        # Rate limiting: delay before fetch to avoid triggering site blocks
+        if self.fetch_delay > 0:
+            time.sleep(self.fetch_delay)
 
         result = verify_citation(url, claim, timeout=self.timeout)
         return json.dumps(result, indent=2)

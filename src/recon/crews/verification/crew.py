@@ -96,7 +96,15 @@ def build_verification_crew(
             "7. Mark each claim as: VERIFIED, PARTIALLY_VERIFIED, UNVERIFIABLE, or CONTRADICTED.\n"
             "8. For CONTRADICTED claims, provide the correct information with source.\n"
             "9. Do NOT verify opinions or subjective assessments.\n"
-            f"10. Maximum {plan.verification.max_queries_per_claim} searches per claim."
+            f"10. Maximum {plan.verification.max_queries_per_claim} searches per claim.\n"
+            f"11. Flag claims with confidence score below {plan.verification.min_confidence} "
+            "as LOW CONFIDENCE in the report.\n"
+            + (
+                "12. Flag claims that lack a primary source (official website, GitHub repo, "
+                "official docs) -- require_primary_source is enabled."
+                if plan.verification.require_primary_source
+                else "12. Primary source citations are recommended but not required."
+            )
         ),
         tools=all_tools,
         llm=llm,

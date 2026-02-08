@@ -2,16 +2,66 @@
 
 Reads all research documents and the verification report, then produces
 a unified analysis with confidence-weighted findings.
+
+Uses context strategy selection to handle inputs that may exceed model
+context windows. When inputs are too large, content is truncated with
+a warning. Full summarize/map_reduce strategies are planned for v0.2.
 """
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 
 from recon.config import ReconPlan  # noqa: TC001
+from recon.context.strategy import (
+    CHARS_PER_TOKEN,
+    PROMPT_OVERHEAD,
+    Strategy,
+    choose_strategy,
+    get_context_window,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def _truncate_to_window(text: str, model: str) -> str:
+    """Truncate text to fit within 75% of the model's context window.
+
+    Leaves room for system prompt, agent backstory, and output generation.
+
+    Args:
+        text: The combined input text.
+        model: Model name for context window lookup.
+
+    Returns:
+        Truncated text with a notice appended, or original text if it fits.
+    """
+    window = get_context_window(model)
+    # Reserve 25% for system prompt + backstory + output generation
+    max_tokens = int(window * 0.75) - PROMPT_OVERHEAD
+    max_chars = max_tokens * CHARS_PER_TOKEN
+
+    if len(text) <= max_chars:
+        return text
+
+    truncated = text[:max_chars]
+    # Try to cut at a paragraph boundary
+    last_break = truncated.rfind("\n\n")
+    if last_break > max_chars * 0.8:
+        truncated = truncated[:last_break]
+
+    notice = (
+        "\n\n---\n\n"
+        "[NOTE: Input was truncated to fit the model's context window. "
+        "Some research content may be missing from this synthesis. "
+        "Consider using a model with a larger context window, or reduce "
+        "the number of investigation angles (--depth quick).]"
+    )
+    return truncated + notice
 
 
 def build_synthesis_crew(
@@ -50,6 +100,24 @@ def build_synthesis_crew(
             input_parts.append(f"## Verification Report\n\n{ver_content}")
 
     all_input = "\n\n---\n\n".join(input_parts)
+
+    # Apply context window strategy
+    strategy = choose_strategy(
+        inputs=input_parts,
+        model_context_window=get_context_window(plan.model),
+        override=plan.context_strategy,
+    )
+
+    if strategy == Strategy.DIRECT:
+        logger.debug("Context strategy: DIRECT (input fits within context window)")
+    elif strategy in (Strategy.SUMMARIZE, Strategy.MAP_REDUCE):
+        logger.warning(
+            "Context strategy: %s -- input exceeds model context window. "
+            "Truncating input to fit. Full %s support planned for v0.2.",
+            strategy.value.upper(),
+            strategy.value,
+        )
+        all_input = _truncate_to_window(all_input, plan.model)
 
     # Build synthesis instructions
     backstory_parts = [
