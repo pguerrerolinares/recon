@@ -28,6 +28,10 @@ from recon.tools.contradiction_detector import (
     ContradictionDetectorTool,
     detect_contradiction,
 )
+from recon.tools.semantic_verifier import (
+    SemanticVerifierTool,
+    verify_semantically,
+)
 from recon.tools.source_tracker import SourceTrackerTool, read_audit_trail, track_source
 
 
@@ -920,3 +924,163 @@ class TestSourceTracker:
     def test_empty_audit_trail(self, tmp_path: Path) -> None:
         entries = read_audit_trail(str(tmp_path / "nonexistent"))
         assert entries == []
+
+
+# --- SemanticVerifier tests ---
+
+
+class TestSemanticVerifier:
+    """Tests for the LLM-based semantic verification tool."""
+
+    _CLAIM = "CrewAI has 44K GitHub stars."
+    _EVIDENCE = (
+        "CrewAI is a popular open-source framework. "
+        "As of January 2026, the repository shows 44,000 stars."
+    )
+
+    def test_supports_verdict(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "SUPPORTS",
+            "confidence": 0.95,
+            "reasoning": "Evidence confirms 44K stars.",
+        })
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+        )
+        assert result["verdict"] == "SUPPORTS"
+        assert result["confidence"] == 0.95
+
+    def test_contradicts_verdict(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "CONTRADICTS",
+            "confidence": 0.9,
+            "reasoning": "Page says 10K stars, not 44K.",
+        })
+        result = verify_semantically(
+            self._CLAIM, "The repo has 10K stars.", mock_llm,
+        )
+        assert result["verdict"] == "CONTRADICTS"
+
+    def test_insufficient_verdict(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "INSUFFICIENT",
+            "confidence": 0.3,
+            "reasoning": "Page mentions CrewAI but no star count.",
+        })
+        result = verify_semantically(
+            self._CLAIM, "CrewAI is a framework.", mock_llm,
+        )
+        assert result["verdict"] == "INSUFFICIENT"
+
+    def test_fallback_on_llm_error(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.side_effect = RuntimeError("API error")
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+        )
+        assert result["verdict"] == "INSUFFICIENT"
+        assert result["confidence"] == 0.0
+
+    def test_fallback_on_invalid_json(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = "Not JSON at all"
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+        )
+        assert result["verdict"] == "INSUFFICIENT"
+        assert result["confidence"] == 0.0
+
+    def test_empty_evidence(self) -> None:
+        mock_llm = MagicMock()
+        result = verify_semantically(
+            self._CLAIM, "", mock_llm,
+        )
+        assert result["verdict"] == "INSUFFICIENT"
+        mock_llm.call.assert_not_called()
+
+    def test_strips_markdown_fences(self) -> None:
+        mock_llm = MagicMock()
+        fenced = (
+            "```json\n"
+            '{"verdict": "SUPPORTS", "confidence": 0.9, '
+            '"reasoning": "Confirmed."}\n'
+            "```"
+        )
+        mock_llm.call.return_value = fenced
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+        )
+        assert result["verdict"] == "SUPPORTS"
+
+    def test_invalid_verdict_falls_back(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "MAYBE",
+            "confidence": 0.5,
+            "reasoning": "Unclear.",
+        })
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+        )
+        assert result["verdict"] == "INSUFFICIENT"
+
+    def test_confidence_clamped(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "SUPPORTS",
+            "confidence": 5.0,
+            "reasoning": "Very confident.",
+        })
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+        )
+        assert result["confidence"] <= 1.0
+
+    def test_url_passed_through(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "SUPPORTS",
+            "confidence": 0.9,
+            "reasoning": "OK.",
+        })
+        result = verify_semantically(
+            self._CLAIM, self._EVIDENCE, mock_llm,
+            url="https://github.com/crewAIInc/crewAI",
+        )
+        assert result["url"] == "https://github.com/crewAIInc/crewAI"
+
+    # --- Tool interface tests ---
+
+    def test_tool_interface(self) -> None:
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({
+            "verdict": "SUPPORTS",
+            "confidence": 0.9,
+            "reasoning": "OK.",
+        })
+        tool = SemanticVerifierTool(llm=mock_llm)
+        result = tool._run(json.dumps({
+            "claim": self._CLAIM,
+            "evidence": self._EVIDENCE,
+        }))
+        parsed = json.loads(result)
+        assert parsed["verdict"] == "SUPPORTS"
+
+    def test_tool_no_llm(self) -> None:
+        tool = SemanticVerifierTool(llm=None)
+        result = tool._run(json.dumps({
+            "claim": self._CLAIM,
+            "evidence": self._EVIDENCE,
+        }))
+        parsed = json.loads(result)
+        assert parsed["verdict"] == "INSUFFICIENT"
+        assert "No LLM" in parsed["reasoning"]
+
+    def test_tool_invalid_input(self) -> None:
+        tool = SemanticVerifierTool(llm=MagicMock())
+        result = tool._run("not json")
+        parsed = json.loads(result)
+        assert "error" in parsed
