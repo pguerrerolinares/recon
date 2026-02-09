@@ -61,7 +61,7 @@ def build_verification_crew(
 
     # Custom verification tools
     verification_tools: list[Any] = [
-        ClaimExtractorTool(max_claims=max_claims),
+        ClaimExtractorTool(max_claims=max_claims, llm=llm),
         CitationVerifierTool(timeout=plan.verification.timeout_per_fetch),
         ConfidenceScorerTool(),
         SourceTrackerTool(output_dir=plan.verification_dir),

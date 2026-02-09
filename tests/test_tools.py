@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import json
 from pathlib import Path  # noqa: TC003
+from unittest.mock import MagicMock
 
 from recon.tools.citation_verifier import CitationVerifierTool, verify_citation
 from recon.tools.claim_extractor import (
     Claim,
     ClaimExtractorTool,
+    _is_bibliography_entry,
+    _is_incomplete_sentence,
+    _is_markdown_noise,
+    _llm_filter_claims,
+    _passes_prefilter,
     _prioritize_claims,
+    _strip_source_sections,
     extract_claims,
 )
 from recon.tools.confidence_scorer import (
@@ -22,6 +29,17 @@ from recon.tools.contradiction_detector import (
     detect_contradiction,
 )
 from recon.tools.source_tracker import SourceTrackerTool, read_audit_trail, track_source
+
+
+def _claim_json(
+    text: str,
+    typ: str = "statistic",
+    keep: bool = True,
+    reason: str = "valid",
+) -> dict[str, object]:
+    """Build a claim dict matching the LLM filter response schema."""
+    return {"text": text, "type": typ, "keep": keep, "reason": reason}
+
 
 # --- ClaimExtractor tests ---
 
@@ -156,6 +174,458 @@ class TestClaimExtractor:
         tool = ClaimExtractorTool(max_claims=5)
         result = json.loads(tool._run(str(doc)))
         assert len(result) == 5
+
+    def test_tool_accepts_llm_parameter(self) -> None:
+        """ClaimExtractorTool should accept an llm parameter."""
+        tool = ClaimExtractorTool(max_claims=10, llm=None)
+        assert tool.llm is None
+
+    def test_tool_with_llm_calls_filter(self, tmp_path: Path) -> None:
+        """ClaimExtractorTool with llm should call the LLM filter."""
+        doc = tmp_path / "test.md"
+        doc.write_text("Revenue reached $10M in 2025.\n")
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json("Revenue reached $10M in 2025."),
+        ])
+        tool = ClaimExtractorTool(llm=mock_llm)
+        result = json.loads(tool._run(str(doc)))
+        assert len(result) >= 1
+        mock_llm.call.assert_called_once()
+
+
+# --- ClaimExtractor Pre-filter tests ---
+
+
+class TestClaimPrefilter:
+    """Tests for the pre-filter heuristics that reject garbage claims."""
+
+    # --- _is_markdown_noise ---
+
+    def test_rejects_table_row_with_pipes(self) -> None:
+        assert _is_markdown_noise("Donation Date** | December 2025 |") is True
+
+    def test_rejects_double_pipe_table_fragment(self) -> None:
+        assert _is_markdown_noise("Official** | Developed and maintained by (e.") is True
+
+    def test_rejects_bold_label_with_colon(self) -> None:
+        assert _is_markdown_noise("Type**: Open-source AI code assistant") is True
+
+    def test_rejects_bold_label_with_bracket(self) -> None:
+        assert _is_markdown_noise("Features**] Full MCP support with resources") is True
+
+    def test_rejects_high_special_char_density(self) -> None:
+        assert _is_markdown_noise("## **Title** | **Value** ##") is True
+
+    def test_accepts_normal_sentence(self) -> None:
+        assert _is_markdown_noise("CrewAI has 44K stars on GitHub.") is False
+
+    def test_accepts_sentence_with_single_pipe(self) -> None:
+        # A single pipe in text is OK (could be in a quote); 2+ pipes rejects
+        assert _is_markdown_noise("Revenue is $10M with growth rate | stable.") is False
+
+    def test_accepts_normal_dollar_claim(self) -> None:
+        assert _is_markdown_noise("Revenue reached $1.5B in 2025.") is False
+
+    # --- _is_bibliography_entry ---
+
+    def test_rejects_numbered_bold_reference(self) -> None:
+        assert _is_bibliography_entry('1. **Anthropic - "Introducing the MCP"** (Nov 2024)') is True
+
+    def test_rejects_author_title_pattern(self) -> None:
+        text = 'Anthropic - "Introducing the Model Context Protocol"'
+        assert _is_bibliography_entry(text) is True
+
+    def test_rejects_url_line(self) -> None:
+        assert _is_bibliography_entry("URL: https://www.anthropic.com/news/mcp") is True
+
+    def test_rejects_access_date(self) -> None:
+        assert _is_bibliography_entry("Access Date: January 2026") is True
+
+    def test_rejects_bare_url(self) -> None:
+        assert _is_bibliography_entry("https://www.anthropic.com/news/mcp") is True
+
+    def test_accepts_normal_claim(self) -> None:
+        assert _is_bibliography_entry("The company was founded in 2020.") is False
+
+    def test_accepts_quoted_claim(self) -> None:
+        assert _is_bibliography_entry('According to the CEO: "We raised $50M in funding."') is False
+
+    # --- _is_incomplete_sentence ---
+
+    def test_rejects_truncated_parenthetical(self) -> None:
+        text = "Developed and maintained by the service provider (e."
+        assert _is_incomplete_sentence(text) is True
+
+    def test_rejects_too_few_words(self) -> None:
+        assert _is_incomplete_sentence("Revenue $10M") is True
+
+    def test_rejects_continuation_word_start(self) -> None:
+        text = "and Model Context Protocol to New Agentic AI Foundation."
+        assert _is_incomplete_sentence(text) is True
+
+    def test_rejects_md_continuation(self) -> None:
+        assert _is_incomplete_sentence("md and Model Context Protocol to New Foundation.") is True
+
+    def test_accepts_full_sentence(self) -> None:
+        assert _is_incomplete_sentence("The company was founded in 2020.") is False
+
+    def test_accepts_sentence_ending_with_exclamation(self) -> None:
+        assert _is_incomplete_sentence("Revenue reached $10M in 2025!") is False
+
+    def test_accepts_sentence_ending_with_question(self) -> None:
+        assert _is_incomplete_sentence("Did revenue reach $10M in 2025?") is False
+
+    # --- _passes_prefilter (combined) ---
+
+    def test_rejects_table_fragment_combined(self) -> None:
+        assert _passes_prefilter("Type**: Open-source AI code assistant") is False
+
+    def test_rejects_bibliography_combined(self) -> None:
+        assert _passes_prefilter('1. **Anthropic - "Introducing MCP"**') is False
+
+    def test_rejects_incomplete_combined(self) -> None:
+        assert _passes_prefilter("Official maintained by (e.") is False
+
+    def test_accepts_real_claim(self) -> None:
+        assert _passes_prefilter("CrewAI has 44K stars on GitHub.") is True
+
+    def test_accepts_attribution_claim(self) -> None:
+        assert _passes_prefilter("The protocol was created by Anthropic in November 2024.") is True
+
+
+# --- Source Section Stripping tests ---
+
+
+class TestSourceSectionStripping:
+    """Tests for _strip_source_sections that removes bibliography."""
+
+    def test_strips_sources_section(self) -> None:
+        text = (
+            "# Report\n\nSome content here.\n\n"
+            "## Sources\n\n"
+            '1. **Anthropic - "Introducing MCP"** (Nov 2024)\n'
+            "   URL: https://example.com\n"
+        )
+        result = _strip_source_sections(text)
+        assert "Sources" not in result
+        assert "Anthropic" not in result
+        assert "Some content here." in result
+
+    def test_strips_references_section(self) -> None:
+        text = "# Report\n\nContent.\n\n## References\n\nRef 1.\n"
+        result = _strip_source_sections(text)
+        assert "References" not in result
+        assert "Content." in result
+
+    def test_strips_bibliography_section(self) -> None:
+        text = "# Report\n\nContent.\n\n# Bibliography\n\nEntry 1.\n"
+        result = _strip_source_sections(text)
+        assert "Bibliography" not in result
+
+    def test_preserves_doc_without_sources(self) -> None:
+        text = "# Report\n\nContent with $10M revenue.\n"
+        assert _strip_source_sections(text) == text
+
+    def test_strips_at_h3_level(self) -> None:
+        text = "# Report\n\nContent.\n\n### Sources\n\nRef.\n"
+        result = _strip_source_sections(text)
+        assert "Sources" not in result
+
+
+# --- Integration: Pre-filter with real document ---
+
+
+class TestPrefilterIntegration:
+    """Integration tests using the real e2e document patterns."""
+
+    def test_rejects_garbage_from_mcp_report(self, tmp_path: Path) -> None:
+        """Claims from the MCP e2e report that were garbage should now be filtered."""
+        doc = tmp_path / "report.md"
+        doc.write_text(
+            "# MCP Report\n\n"
+            "Created by Anthropic and released in November 2024, MCP has rapidly evolved.\n"
+            "In December 2025, Anthropic donated MCP to the Agentic AI Foundation.\n\n"
+            "| Attribute | Details |\n"
+            "|-----------|--------|\n"
+            "| **Donation Date** | December 2025 |\n"
+            "| **Type** | Open-source protocol |\n\n"
+            "#### Continue\n"
+            "- **Provider**: Continue.dev\n"
+            "- **Type**: Open-source AI code assistant\n"
+            '- **Features**: Full MCP support with "@" mentions for resources.\n\n'
+            "## Sources\n\n"
+            '1. **Anthropic - "Introducing the Model Context Protocol"** (Nov 25, 2024)\n'
+            "   - URL: https://www.anthropic.com/news/model-context-protocol\n"
+            "   - Access Date: January 2026\n"
+        )
+        claims = extract_claims(str(doc))
+        claim_texts = [c.text for c in claims]
+
+        # These garbage patterns should be filtered out
+        for text in claim_texts:
+            assert "**" not in text or '"' in text, f"Bold label artifact survived: {text}"
+            assert text.count("|") < 2, f"Table fragment survived: {text}"
+            assert not text.startswith("Access Date"), f"Access date survived: {text}"
+
+        # But real claims should survive
+        assert any("Anthropic" in t and "November 2024" in t for t in claim_texts), (
+            f"Real claim about MCP release was incorrectly filtered. Claims: {claim_texts}"
+        )
+
+    def test_source_section_excluded(self, tmp_path: Path) -> None:
+        """Claims from Sources/References sections should not be extracted."""
+        doc = tmp_path / "report.md"
+        doc.write_text(
+            "# Report\n\n"
+            "The company raised $50M in 2025.\n\n"
+            "## Sources\n\n"
+            '1. **Anthropic - "Introducing MCP"** (Nov 25, 2024)\n'
+            "   URL: https://www.anthropic.com/news/model-context-protocol\n"
+            "   Access Date: January 2026\n"
+            '2. **Wikipedia - "Model Context Protocol"**\n'
+            "   URL: https://en.wikipedia.org/wiki/MCP\n"
+        )
+        claims = extract_claims(str(doc))
+        claim_texts = [c.text for c in claims]
+
+        # Nothing from the Sources section should appear
+        assert not any("Wikipedia" in t for t in claim_texts)
+        assert not any("Introducing MCP" in t for t in claim_texts)
+        # The real claim should survive
+        assert any("$50M" in t for t in claim_texts)
+
+    def test_claim_count_reduced_on_noisy_doc(self, tmp_path: Path) -> None:
+        """Noisy documents should produce fewer claims with pre-filtering."""
+        doc = tmp_path / "noisy.md"
+        # Mix of real claims and noise
+        doc.write_text(
+            "# Analysis\n\n"
+            "Revenue reached $10M in 2025.\n"
+            "The company has 5000 users globally.\n"
+            "Growth rate was 45% year over year.\n\n"
+            "| Feature | Status |\n"
+            "| **Type** | Cloud platform |\n"
+            "| **Users** | 5000 |\n"
+            "| **Revenue** | $10M |\n\n"
+            "## Sources\n\n"
+            '1. **Company - "Annual Report"** (2025)\n'
+            "   Access Date: January 2026\n"
+        )
+        claims = extract_claims(str(doc))
+        # Should only have the real prose claims, not table/source entries
+        assert len(claims) <= 5
+        # All claims should be substantive sentences
+        for c in claims:
+            assert len(c.text.split()) >= 4, f"Claim too short: {c.text}"
+
+
+# --- LLM Filter tests ---
+
+
+class TestLLMFilter:
+    """Tests for _llm_filter_claims LLM-based quality filter."""
+
+    _REV = "Revenue reached $10M in 2025."
+
+    def _make_claims(self, texts: list[str]) -> list[Claim]:
+        """Helper to create Claim objects from text list."""
+        return [
+            Claim(f"C{i+1}", text, "doc.md", "statistic")
+            for i, text in enumerate(texts)
+        ]
+
+    def test_keeps_valid_claims(self) -> None:
+        """LLM marks claims as keep=True -> they survive."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(self._REV),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert "$10M" in result[0].text
+
+    def test_rejects_garbage_claims(self) -> None:
+        """LLM marks claims as keep=False -> they are removed."""
+        garbage = "Type**: Open-source AI code assistant"
+        claims = self._make_claims([self._REV, garbage])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(self._REV),
+            _claim_json(garbage, keep=False, reason="fragment"),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert "Revenue" in result[0].text
+
+    def test_decomposes_compound_claims(self) -> None:
+        """LLM decomposes compound claim -> multiple atomic claims."""
+        compound = "Founded in 2020 with $50M funding and 100 employees."
+        claims = self._make_claims([compound])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(compound, keep=False, reason="compound"),
+            _claim_json("The company was founded in 2020.", "date"),
+            _claim_json("The company received $50M in funding."),
+            _claim_json("The company had 100 employees."),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 3
+        assert result[0].claim_id == "C1"
+        assert result[1].claim_id == "C2"
+        assert result[2].claim_id == "C3"
+
+    def test_fallback_on_llm_error(self) -> None:
+        """LLM raises exception -> returns original claims unchanged."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.side_effect = RuntimeError("API error")
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert result[0].text == self._REV
+
+    def test_fallback_on_invalid_json(self) -> None:
+        """LLM returns invalid JSON -> returns original claims."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = "This is not JSON at all"
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert result[0].text == self._REV
+
+    def test_fallback_on_non_list_response(self) -> None:
+        """LLM returns a JSON object instead of array -> originals."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps({"error": "unexpected"})
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+
+    def test_fallback_when_all_rejected(self) -> None:
+        """LLM rejects everything -> returns original claims as fallback."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(self._REV, keep=False, reason="rejected"),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1  # fallback to originals
+        assert result[0].text == self._REV
+
+    def test_strips_markdown_fences_from_response(self) -> None:
+        """LLM wraps response in ```json fences -> still parses."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        fenced = json.dumps([_claim_json(self._REV)])
+        mock_llm.call.return_value = (
+            "```json\n" + fenced + "\n```"
+        )
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert "$10M" in result[0].text
+
+    def test_empty_claims_returns_empty(self) -> None:
+        """Empty input -> empty output, no LLM call."""
+        mock_llm = MagicMock()
+        result = _llm_filter_claims([], mock_llm)
+        assert result == []
+        mock_llm.call.assert_not_called()
+
+    def test_inherits_cited_source(self) -> None:
+        """LLM-filtered claims should inherit cited_source."""
+        claims = [
+            Claim(
+                "C1", self._REV, "doc.md",
+                "statistic", "https://example.com",
+            ),
+        ]
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(self._REV),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert result[0].cited_source == "https://example.com"
+
+    def test_validates_claim_type(self) -> None:
+        """Invalid claim types from LLM should default to 'statistic'."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(self._REV, typ="invalid_type"),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert result[0].claim_type == "statistic"
+
+    def test_rejects_short_text_from_llm(self) -> None:
+        """Claims shorter than 15 chars from LLM should be rejected."""
+        claims = self._make_claims([self._REV])
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json("short"),
+            _claim_json(self._REV),
+        ])
+        result = _llm_filter_claims(claims, mock_llm)
+        assert len(result) == 1
+        assert "Revenue" in result[0].text
+
+
+# --- Integration: extract_claims with LLM ---
+
+
+class TestExtractClaimsWithLLM:
+    """Integration tests for extract_claims with LLM filter."""
+
+    _REV = "Revenue reached $10M in 2025."
+
+    def test_extract_with_llm_filter(self, tmp_path: Path) -> None:
+        """extract_claims with llm= should apply LLM filtering."""
+        doc = tmp_path / "test.md"
+        doc.write_text(
+            "# Report\n\n"
+            "Revenue reached $10M in 2025.\n"
+            "The company has 5000 users globally.\n"
+        )
+        users = "The company has 5000 users globally."
+        mock_llm = MagicMock()
+        mock_llm.call.return_value = json.dumps([
+            _claim_json(self._REV),
+            _claim_json(users),
+        ])
+        claims = extract_claims(str(doc), llm=mock_llm)
+        assert len(claims) >= 1
+        mock_llm.call.assert_called_once()
+
+    def test_extract_without_llm(self, tmp_path: Path) -> None:
+        """extract_claims without llm= uses regex only."""
+        doc = tmp_path / "test.md"
+        doc.write_text("Revenue reached $10M in 2025.\n")
+        claims = extract_claims(str(doc), llm=None)
+        assert len(claims) >= 1
+
+    def test_llm_filter_applied_before_prioritization(
+        self, tmp_path: Path,
+    ) -> None:
+        """LLM filter runs before max_claims prioritization."""
+        doc = tmp_path / "test.md"
+        lines = [
+            f"Revenue reached ${i}M in 2025.\n"
+            for i in range(1, 21)
+        ]
+        doc.write_text("# Report\n\n" + "".join(lines))
+
+        # LLM keeps only 5 claims
+        mock_llm = MagicMock()
+        kept = [
+            _claim_json(f"Revenue reached ${i}M in 2025.")
+            for i in range(1, 6)
+        ]
+        mock_llm.call.return_value = json.dumps(kept)
+
+        claims = extract_claims(str(doc), max_claims=3, llm=mock_llm)
+        # LLM returned 5, prioritization caps to 3
+        assert len(claims) == 3
 
 
 # --- CitationVerifier tests ---
