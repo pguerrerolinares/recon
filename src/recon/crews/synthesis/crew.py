@@ -3,19 +3,24 @@
 Reads all research documents and the verification report, then produces
 a unified analysis with confidence-weighted findings.
 
-Uses context strategy selection to handle inputs that may exceed model
-context windows. When inputs are too large, content is truncated with
-a warning. Full summarize/map_reduce strategies are planned for v0.2.
+v0.3 enhancements:
+- Structured claims JSON from verification DB injected as context
+- Inline citation style ([1], [2]) in the final report
+- memory=True with ONNX embedder for short-term memory
+- Knowledge context from prior runs
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import sqlite3  # noqa: TC003
 from pathlib import Path
 from typing import Any
 
 from crewai import Agent, Crew, Process, Task
 
+from recon import db as _db
 from recon.config import ReconPlan  # noqa: TC001
 from recon.context.strategy import (
     CHARS_PER_TOKEN,
@@ -24,6 +29,7 @@ from recon.context.strategy import (
     choose_strategy,
     get_context_window,
 )
+from recon.crews.investigation.crew import ONNX_EMBEDDER_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -64,12 +70,55 @@ def _truncate_to_window(text: str, model: str) -> str:
     return truncated + notice
 
 
+def _build_claims_context(
+    conn: sqlite3.Connection | None,
+    run_id: str | None,
+) -> str:
+    """Build a structured claims summary from the knowledge DB.
+
+    Returns a JSON-formatted claims summary block, or empty string.
+    """
+    if conn is None or run_id is None:
+        return ""
+
+    try:
+        claims = _db.get_claims(conn, run_id=run_id, limit=100)
+        if not claims:
+            return ""
+
+        summary: list[dict[str, Any]] = []
+        for c in claims:
+            summary.append({
+                "id": c["id"],
+                "text": c["text"],
+                "status": c.get("verification_status", "unknown"),
+                "confidence": c.get("confidence"),
+                "source": c.get("cited_source", ""),
+            })
+
+        # Group by status for quick reference
+        by_status: dict[str, int] = {}
+        for c in summary:
+            s = c["status"]
+            by_status[s] = by_status.get(s, 0) + 1
+
+        header = "VERIFIED CLAIMS DATA (structured, from verification phase):\n"
+        stats = f"Status counts: {json.dumps(by_status)}\n"
+        data = json.dumps(summary, indent=2)
+
+        return f"\n\n{header}{stats}\n{data}"
+    except Exception:
+        return ""
+
+
 def build_synthesis_crew(
     plan: ReconPlan,
     llm: Any,
     research_dir: str,
     verification_dir: str | None = None,
     verbose: bool = False,
+    conn: sqlite3.Connection | None = None,
+    run_id: str | None = None,
 ) -> Crew:
     """Build a synthesis crew that produces the final report.
 
@@ -79,6 +128,8 @@ def build_synthesis_crew(
         research_dir: Path to directory containing research markdown files.
         verification_dir: Path to directory with verification report, or None.
         verbose: Whether to enable verbose output.
+        conn: Optional SQLite connection for reading claims from DB.
+        run_id: Optional run identifier for DB queries.
 
     Returns:
         A configured CrewAI Crew ready to kickoff.
@@ -100,6 +151,11 @@ def build_synthesis_crew(
             input_parts.append(f"## Verification Report\n\n{ver_content}")
 
     all_input = "\n\n---\n\n".join(input_parts)
+
+    # Structured claims from DB (supplements the verification report)
+    claims_context = _build_claims_context(conn, run_id)
+    if claims_context:
+        all_input += claims_context
 
     # Apply context window strategy
     strategy = choose_strategy(
@@ -125,8 +181,11 @@ def build_synthesis_crew(
         "",
         "CORE RULES:",
         "1. Read ALL input documents before writing.",
-        "2. Cite which document supports each claim using [Source: filename].",
-        "3. When documents contradict, note both positions.",
+        "2. Use INLINE CITATIONS in Perplexity style: [1], [2], etc. "
+        "Each number references a source listed in the Sources section "
+        "at the end. Example: 'Revenue reached $1B [1] while costs '",
+        "'remained stable [2].'",
+        "3. When documents contradict, note both positions with citations.",
         "4. Prioritize claims marked VERIFIED in the verification report.",
         "5. Do NOT rely on CONTRADICTED claims unless noting the contradiction.",
         "6. UNVERIFIABLE claims: Do NOT include in the main body of "
@@ -138,13 +197,18 @@ def build_synthesis_crew(
         "of what was and was not confirmed.",
         "8. Do not introduce new factual claims. Synthesize, do not research.",
         "9. Structure output for decision-making: takeaways, recommendations, actions.",
+        "10. End the report with a numbered Sources section listing "
+        "all cited URLs: '[1] https://... — Title or description'.",
     ]
     if plan.synthesis.instructions:
         backstory_parts.append(f"\nAdditional instructions:\n{plan.synthesis.instructions}")
 
     synthesizer = Agent(
         role="Research Director",
-        goal="Produce a trustworthy final report with confidence-weighted findings.",
+        goal=(
+            "Produce a trustworthy final report with confidence-weighted "
+            "findings and inline citations."
+        ),
         backstory="\n".join(backstory_parts),
         llm=llm,
         verbose=verbose,
@@ -163,7 +227,10 @@ def build_synthesis_crew(
             "- Divergent findings (where sources disagree)\n"
             "- Detailed analysis by topic\n"
             "- Ranked recommendations\n"
-            "- Confidence assessment for each major finding\n\n"
+            "- Confidence assessment for each major finding\n"
+            "- Numbered Sources section at the end ([1], [2], etc.)\n\n"
+            "CITATION FORMAT: Use inline numbered references like [1], [2]. "
+            "Example: 'The market grew 15% [1] despite headwinds [2].'\n\n"
             "CRITICAL: Only include VERIFIED and PARTIALLY_VERIFIED "
             "claims in the main analysis sections. For PARTIALLY_VERIFIED "
             "claims, note what was and was not confirmed.\n\n"
@@ -173,9 +240,9 @@ def build_synthesis_crew(
             "rely on."
         ),
         expected_output=(
-            "A comprehensive markdown report where the main body "
-            "contains only verified findings, plus an appendix of "
-            "unverified claims for follow-up."
+            "A comprehensive markdown report with inline citations [1], [2], "
+            "where the main body contains only verified findings, a numbered "
+            "Sources section at the end, plus an appendix of unverified claims."
         ),
         agent=synthesizer,
         output_file=output_file,
@@ -186,4 +253,6 @@ def build_synthesis_crew(
         tasks=[synthesis_task],
         process=Process.sequential,
         verbose=verbose,
+        memory=True,
+        embedder=ONNX_EMBEDDER_CONFIG,  # type: ignore[arg-type]
     )

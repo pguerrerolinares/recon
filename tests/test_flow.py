@@ -1018,3 +1018,178 @@ class TestPriorClaimsContext:
         from recon.crews.verification.crew import _get_stale_claims_context
 
         assert _get_stale_claims_context(None, "test") == ""
+
+
+# ---------------------------------------------------------------------------
+# Synthesis crew tests (Batch 8)
+# ---------------------------------------------------------------------------
+
+
+class TestSynthesisCrew:
+    """Test synthesis crew builder features."""
+
+    @patch("recon.crews.synthesis.crew.Crew")
+    @patch("recon.crews.synthesis.crew.Task")
+    @patch("recon.crews.synthesis.crew.Agent")
+    def test_memory_and_embedder_enabled(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.investigation.crew import ONNX_EMBEDDER_CONFIG
+        from recon.crews.synthesis.crew import build_synthesis_crew
+
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "test.md").write_text("# Test\nContent.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK)
+        build_synthesis_crew(
+            plan=plan, llm=MagicMock(), research_dir=str(research),
+        )
+
+        crew_kwargs = mock_crew_cls.call_args[1]
+        assert crew_kwargs["memory"] is True
+        assert crew_kwargs["embedder"] == ONNX_EMBEDDER_CONFIG
+
+    @patch("recon.crews.synthesis.crew.Crew")
+    @patch("recon.crews.synthesis.crew.Task")
+    @patch("recon.crews.synthesis.crew.Agent")
+    def test_inline_citations_in_instructions(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.synthesis.crew import build_synthesis_crew
+
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "test.md").write_text("# Test\nContent.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK)
+        build_synthesis_crew(
+            plan=plan, llm=MagicMock(), research_dir=str(research),
+        )
+
+        # Check agent backstory mentions inline citations
+        agent_kwargs = mock_agent_cls.call_args[1]
+        assert "[1]" in agent_kwargs["backstory"]
+        assert "Perplexity" in agent_kwargs["backstory"]
+
+    @patch("recon.crews.synthesis.crew.Crew")
+    @patch("recon.crews.synthesis.crew.Task")
+    @patch("recon.crews.synthesis.crew.Agent")
+    def test_claims_context_injected(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.synthesis.crew import build_synthesis_crew
+        from recon.db import get_db, insert_run, upsert_claim
+
+        conn = get_db(tmp_path / "syn.db")
+        insert_run(
+            conn, run_id="run-syn", timestamp="2026-01-15T10:00:00Z",
+            topic="test", depth="quick",
+        )
+        upsert_claim(
+            conn, claim_id="c1", text="Revenue is $1B",
+            verification_status="VERIFIED", confidence=0.9,
+            run_id="run-syn", timestamp="2026-01-15T10:00:00Z",
+        )
+
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "test.md").write_text("# Test\nRevenue is $1B.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK)
+        build_synthesis_crew(
+            plan=plan, llm=MagicMock(), research_dir=str(research),
+            conn=conn, run_id="run-syn",
+        )
+
+        # Task description should contain claims data
+        task_kwargs = mock_task_cls.call_args[1]
+        assert "VERIFIED CLAIMS DATA" in task_kwargs["description"]
+        assert "Revenue is $1B" in task_kwargs["description"]
+        conn.close()
+
+    @patch("recon.crews.synthesis.crew.Crew")
+    @patch("recon.crews.synthesis.crew.Task")
+    @patch("recon.crews.synthesis.crew.Agent")
+    def test_no_conn_no_claims_context(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.synthesis.crew import build_synthesis_crew
+
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "test.md").write_text("# Test\nContent.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK)
+        build_synthesis_crew(
+            plan=plan, llm=MagicMock(), research_dir=str(research),
+        )
+
+        task_kwargs = mock_task_cls.call_args[1]
+        assert "VERIFIED CLAIMS DATA" not in task_kwargs["description"]
+
+
+class TestBuildClaimsContext:
+    """Test _build_claims_context helper."""
+
+    def test_with_claims(self, tmp_path: Path) -> None:
+        from recon.crews.synthesis.crew import _build_claims_context
+        from recon.db import get_db, insert_run, upsert_claim
+
+        conn = get_db(tmp_path / "ctx.db")
+        insert_run(
+            conn, run_id="run-ctx", timestamp="2026-01-15T10:00:00Z",
+            topic="test", depth="quick",
+        )
+        upsert_claim(
+            conn, claim_id="c1", text="Test claim",
+            verification_status="VERIFIED", confidence=0.95,
+            run_id="run-ctx", timestamp="2026-01-15T10:00:00Z",
+        )
+
+        result = _build_claims_context(conn, "run-ctx")
+        assert "VERIFIED CLAIMS DATA" in result
+        assert "Test claim" in result
+        assert '"VERIFIED"' in result
+        conn.close()
+
+    def test_no_conn(self) -> None:
+        from recon.crews.synthesis.crew import _build_claims_context
+
+        assert _build_claims_context(None, "run-x") == ""
+
+    def test_no_run_id(self, tmp_path: Path) -> None:
+        from recon.crews.synthesis.crew import _build_claims_context
+        from recon.db import get_db
+
+        conn = get_db(tmp_path / "ctx.db")
+        assert _build_claims_context(conn, None) == ""
+        conn.close()
+
+    def test_no_claims(self, tmp_path: Path) -> None:
+        from recon.crews.synthesis.crew import _build_claims_context
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "ctx.db")
+        insert_run(
+            conn, run_id="run-empty", timestamp="2026-01-15T10:00:00Z",
+            topic="test", depth="quick",
+        )
+        assert _build_claims_context(conn, "run-empty") == ""
+        conn.close()

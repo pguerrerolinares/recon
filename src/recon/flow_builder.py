@@ -717,6 +717,8 @@ def build_and_run(
                 research_dir=plan.research_dir,
                 verification_dir=plan.verification_dir if plan.verify else None,
                 verbose=verbose,
+                conn=conn,
+                run_id=run_id,
             )
 
             try:
