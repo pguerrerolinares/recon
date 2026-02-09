@@ -7,7 +7,7 @@ a development environment, run tests, and submit changes.
 
 ```bash
 # Clone the repository
-git clone https://github.com/paulofcardoso/recon.git
+git clone https://github.com/pguerrerolinares/recon.git
 cd recon
 
 # Create a virtual environment

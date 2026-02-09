@@ -38,24 +38,18 @@ dependencies = [
 recon = "recon.cli:app"
 
 [project.optional-dependencies]
-memory = [
-    "memvid-sdk>=2.0",
-]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "ruff>=0.5",
     "pyright>=1.1",
 ]
-all = [
-    "recon-ai[memory]",
-]
 
 [project.urls]
-Homepage = "https://github.com/paulofcardoso/recon"
-Repository = "https://github.com/paulofcardoso/recon"
-Issues = "https://github.com/paulofcardoso/recon/issues"
-Changelog = "https://github.com/paulofcardoso/recon/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/pguerrerolinares/recon"
+Repository = "https://github.com/pguerrerolinares/recon"
+Issues = "https://github.com/pguerrerolinares/recon/issues"
+Changelog = "https://github.com/pguerrerolinares/recon/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]

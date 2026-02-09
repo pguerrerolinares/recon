@@ -68,6 +68,19 @@ recon verify ./research/
 
 # Check what happened in a previous run
 recon status
+
+# Browse verified claims across all runs
+recon claims --search "AI frameworks" --limit 20
+
+# View verification history for a specific claim
+recon history <claim_id>
+
+# Show statistics (global or per-run)
+recon stats
+recon stats --run <run_id>
+
+# Find stale claims needing re-verification
+recon reverify --days 30
 ```
 
 ### Depth levels
@@ -83,20 +96,27 @@ recon status
 ```mermaid
 graph LR
     P[plan.yaml] --> I
+    DB[("knowledge.db")] <--> I
 
     subgraph Pipeline
-        I["Investigation\n1-5 parallel agents"] --> V["Verification\n5 tools, zero LLM cost"]
-        V --> S["Synthesis\nconfidence-weighted report"]
+        I["Investigation\n1-5 parallel agents"] --> V["Verification\n6 tools + semantic LLM judge"]
+        V --> S["Synthesis\nPerplexity-style citations"]
     end
 
     I --> R["research/*.md"]
     V --> VR["verification/report.md"]
     S --> F["output/final-report.md"]
+    
+    DB <--> V
+    DB <--> S
 ```
 
-The verification phase uses 5 deterministic tools (regex extraction, HTTP
-fetching, term matching) -- no LLM calls. Fact-checking adds compute time
-but zero additional API cost.
+The verification phase combines deterministic tools (regex extraction, HTTP
+fetching, term matching) with an LLM-powered semantic verifier that judges
+whether evidence truly supports each claim.
+
+All runs are tracked in a local SQLite knowledge database that enables
+cross-run learning, claim history, and re-verification of stale facts.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full technical breakdown.
 
@@ -112,17 +132,25 @@ Works with any OpenAI-compatible LLM and 4 search APIs:
 recon run --topic "X" --provider anthropic --model claude-sonnet-4
 ```
 
-## Cross-run memory
+## Knowledge database
 
-Optional. Recon can carry knowledge between runs using [memvid](https://github.com/memvid/memvid):
+Recon maintains a local SQLite database (`knowledge.db`) that tracks everything
+across runs:
 
-```bash
-pip install recon-ai[memory]
-recon run --topic "AI frameworks" --memory ./memory/recon.mv2
-```
+- **Claims**: All verified claims with confidence scores and evidence
+- **Sources**: URL registry with reliability tracking
+- **Runs**: Full pipeline execution history with token usage and cost
+- **Events**: Detailed audit trail of agent actions
 
-Second run on a related topic starts with context from previous research.
-Everything is still verified independently.
+Features enabled by the knowledge DB:
+
+- **FTS5 search**: Fast full-text search over all verified claims
+- **Claim history**: Track how verification status changes over time
+- **Stale detection**: Re-verify claims older than N days
+- **Cross-run learning**: Claims seen multiple times build confidence
+- **Prior knowledge**: New investigations start with relevant past findings
+
+The database is always-on by default. No configuration needed.
 
 ## Plan file
 

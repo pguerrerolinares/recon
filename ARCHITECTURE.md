@@ -517,8 +517,9 @@ angles without re-running completed ones.
 
 ## Knowledge system
 
-SQLite `knowledge.db` replaces the legacy memvid `.mv2` system. Always-on
-by default, no external dependencies.
+SQLite `knowledge.db` provides persistent cross-run intelligence. Always-on
+by default, no external dependencies, ~80MB local ONNX embedder for CrewAI
+memory.
 
 ```mermaid
 flowchart LR
@@ -531,10 +532,25 @@ flowchart LR
     style DB fill:#1a1a3a,stroke:#4a4aee,color:#fff
 ```
 
-- **Prior knowledge**: FTS5 search over claims table before investigation
+**Key features:**
+
+- **Prior knowledge**: FTS5 search over claims table before investigation starts
 - **Stale claims**: Claims older than `stale_after_days` are surfaced for re-verification
 - **Cross-run enrichment**: Claims seen multiple times get `times_seen` incremented
 - **Inline citations**: Synthesis agent formats Perplexity-style `[1]` references
+- **Claim history**: Track verification status changes over time
+- **Token tracking**: Full cost estimation per run and per phase
+- **Fast search**: Full-text search over all verified claims (`recon claims --search`)
+
+**Configuration:**
+
+```yaml
+knowledge:
+  enabled: true               # Always-on by default
+  db_path: ./knowledge.db
+  embedder: onnx             # Local, ~80MB, no API key needed
+  stale_after_days: 30
+```
 
 ## Docker
 
