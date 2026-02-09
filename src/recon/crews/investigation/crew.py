@@ -3,6 +3,13 @@
 This crew dynamically creates one agent + task per investigation angle
 defined in the plan. All agents run with async_execution=True for
 parallel research.
+
+v0.3 enhancements:
+- ``memory=True`` with ONNX embedder for shared short-term memory
+- ``Process.hierarchical`` with a manager agent for DEEP depth
+- ``reasoning=True`` on agents for DEEP depth (chain-of-thought)
+- ``allow_delegation=True`` for DEEP depth (manager can delegate)
+- ``step_callback`` / ``task_callback`` hooks for observability
 """
 
 from __future__ import annotations
@@ -12,12 +19,22 @@ from typing import TYPE_CHECKING, Any
 
 from crewai import Agent, Crew, Process, Task
 
-from recon.config import DEPTH_MAX_ITER, Investigation, ReconPlan  # noqa: TC001
+from recon.config import DEPTH_MAX_ITER, Depth, Investigation, ReconPlan  # noqa: TC001
 
 if TYPE_CHECKING:
     from crewai.agents.agent_builder.base_agent import BaseAgent
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# ONNX embedder config (used by CrewAI's ShortTermMemory / ChromaDB)
+# ---------------------------------------------------------------------------
+
+ONNX_EMBEDDER_CONFIG: dict[str, Any] = {
+    "provider": "onnx",
+    "config": {},  # uses all-MiniLM-L6-v2 by default (~80MB, local)
+}
+
 
 # ---------------------------------------------------------------------------
 # Sub-question generation
@@ -101,6 +118,34 @@ def generate_sub_questions(
     return list(seed_questions)
 
 
+def _build_manager_agent(llm: Any, topic: str) -> Agent:
+    """Build a manager agent for hierarchical process (DEEP depth).
+
+    The manager coordinates the research agents, delegates tasks,
+    resolves conflicts, and ensures comprehensive coverage.
+    """
+    return Agent(
+        role="Research Director",
+        goal=(
+            f"Coordinate and direct the research team investigating '{topic}'. "
+            "Ensure comprehensive coverage, avoid duplication, and synthesize "
+            "findings when sub-topics overlap."
+        ),
+        backstory=(
+            "You are a senior research director with expertise in managing "
+            "multi-agent research teams. Your job is to:\n"
+            "1. Review each researcher's plan and provide guidance\n"
+            "2. Identify gaps in coverage across investigation angles\n"
+            "3. Direct researchers to fill coverage gaps\n"
+            "4. Resolve conflicting findings between researchers\n"
+            "5. Ensure the team produces high-quality, well-sourced output"
+        ),
+        llm=llm,
+        allow_delegation=True,
+        verbose=False,
+    )
+
+
 def build_investigation_crew(
     plan: ReconPlan,
     investigations: list[Investigation],
@@ -108,6 +153,8 @@ def build_investigation_crew(
     search_tools: list[Any],
     verbose: bool = False,
     prior_knowledge: str | None = None,
+    step_callback: Any | None = None,
+    task_callback: Any | None = None,
 ) -> Crew:
     """Build an investigation crew with one agent per investigation angle.
 
@@ -119,12 +166,17 @@ def build_investigation_crew(
         verbose: Whether to enable verbose output.
         prior_knowledge: Optional prior research findings from memory to inject
             into agent backstories as starting context.
+        step_callback: Optional callback invoked after each agent step.
+        task_callback: Optional callback invoked after each task completes.
 
     Returns:
         A configured CrewAI Crew ready to kickoff.
     """
     agents: list[BaseAgent] = []
     tasks: list[Task] = []
+
+    is_deep = plan.depth == Depth.DEEP
+    use_hierarchical = is_deep and len(investigations) > 1
 
     # Auto-generate sub-questions per angle if enabled
     if plan.auto_questions:
@@ -210,6 +262,9 @@ def build_investigation_crew(
             llm=llm,
             verbose=verbose,
             max_iter=DEPTH_MAX_ITER[plan.depth],
+            # DEEP depth: enable chain-of-thought reasoning and delegation
+            reasoning=is_deep,
+            allow_delegation=use_hierarchical,
         )
 
         questions_text = "\n".join(f"- {q}" for q in inv.questions)
@@ -248,9 +303,25 @@ def build_investigation_crew(
         agents.append(agent)
         tasks.append(task)
 
-    return Crew(
-        agents=agents,
-        tasks=tasks,
-        process=Process.sequential,
-        verbose=verbose,
-    )
+    # --- Crew configuration ---
+    crew_kwargs: dict[str, Any] = {
+        "agents": agents,
+        "tasks": tasks,
+        "verbose": verbose,
+        # Enable CrewAI's built-in short-term memory (ChromaDB + ONNX)
+        "memory": True,
+        "embedder": ONNX_EMBEDDER_CONFIG,
+    }
+
+    if use_hierarchical:
+        crew_kwargs["process"] = Process.hierarchical
+        crew_kwargs["manager_agent"] = _build_manager_agent(llm, plan.topic)
+    else:
+        crew_kwargs["process"] = Process.sequential
+
+    if step_callback is not None:
+        crew_kwargs["step_callback"] = step_callback
+    if task_callback is not None:
+        crew_kwargs["task_callback"] = task_callback
+
+    return Crew(**crew_kwargs)

@@ -592,3 +592,210 @@ class TestInvestigationPriorKnowledge:
 
         agent_call_kwargs = mock_agent_cls.call_args[1]
         assert "previous research runs" not in agent_call_kwargs["backstory"]
+
+
+class TestInvestigationCrewFeatures:
+    """Test v0.3 investigation crew enhancements."""
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_memory_and_embedder_enabled(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        from recon.config import Depth
+        from recon.crews.investigation.crew import ONNX_EMBEDDER_CONFIG, build_investigation_crew
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.QUICK)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+        )
+
+        crew_call_kwargs = mock_crew_cls.call_args[1]
+        assert crew_call_kwargs["memory"] is True
+        assert crew_call_kwargs["embedder"] == ONNX_EMBEDDER_CONFIG
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_quick_uses_sequential(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        from crewai import Process
+
+        from recon.config import Depth
+        from recon.crews.investigation.crew import build_investigation_crew
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.QUICK)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+        )
+
+        crew_call_kwargs = mock_crew_cls.call_args[1]
+        assert crew_call_kwargs["process"] == Process.sequential
+        assert "manager_agent" not in crew_call_kwargs
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_deep_uses_hierarchical(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        from crewai import Process
+
+        from recon.config import Depth
+        from recon.crews.investigation.crew import build_investigation_crew
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.DEEP)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+        )
+
+        crew_call_kwargs = mock_crew_cls.call_args[1]
+        assert crew_call_kwargs["process"] == Process.hierarchical
+        assert crew_call_kwargs["manager_agent"] is not None
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_deep_agents_have_reasoning(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        from recon.config import Depth
+        from recon.crews.investigation.crew import build_investigation_crew
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.DEEP)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+        )
+
+        # Check first researcher agent (not the manager agent)
+        # The first call to Agent should be the manager (from _build_manager_agent)
+        # but since _build_manager_agent is called separately, let's check any
+        # call that has "Researcher" in role
+        for call in mock_agent_cls.call_args_list:
+            kwargs = call[1]
+            if "Researcher" in kwargs.get("role", ""):
+                assert kwargs["reasoning"] is True
+                assert kwargs["allow_delegation"] is True
+                break
+        else:
+            msg = "No researcher agent found in calls"
+            raise AssertionError(msg)
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_quick_agents_no_reasoning(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        from recon.config import Depth
+        from recon.crews.investigation.crew import build_investigation_crew
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.QUICK)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+        )
+
+        agent_kwargs = mock_agent_cls.call_args[1]
+        assert agent_kwargs["reasoning"] is False
+        assert agent_kwargs["allow_delegation"] is False
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_callbacks_forwarded(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        from recon.config import Depth
+        from recon.crews.investigation.crew import build_investigation_crew
+
+        step_cb = MagicMock()
+        task_cb = MagicMock()
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.QUICK)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+            step_callback=step_cb,
+            task_callback=task_cb,
+        )
+
+        crew_call_kwargs = mock_crew_cls.call_args[1]
+        assert crew_call_kwargs["step_callback"] is step_cb
+        assert crew_call_kwargs["task_callback"] is task_cb
+
+    @patch("recon.crews.investigation.crew.Crew")
+    @patch("recon.crews.investigation.crew.Task")
+    @patch("recon.crews.investigation.crew.Agent")
+    def test_standard_uses_sequential(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+    ) -> None:
+        """STANDARD depth should use sequential process (not hierarchical)."""
+        from crewai import Process
+
+        from recon.config import Depth
+        from recon.crews.investigation.crew import build_investigation_crew
+
+        plan = ReconPlan(topic="AI agents", depth=Depth.STANDARD)
+        investigations = plan.get_investigations()
+
+        build_investigation_crew(
+            plan=plan,
+            investigations=investigations,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
+        )
+
+        crew_call_kwargs = mock_crew_cls.call_args[1]
+        assert crew_call_kwargs["process"] == Process.sequential
