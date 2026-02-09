@@ -9,12 +9,14 @@ import yaml
 from pydantic import ValidationError
 
 from recon.config import (
+    PROVIDER_PRICING,
     Depth,
     Investigation,
     ReconPlan,
     SearchConfig,
     VerificationConfig,
     create_plan_from_topic,
+    estimate_cost,
     load_plan,
 )
 
@@ -231,3 +233,61 @@ class TestCreatePlanFromTopic:
         plan = create_plan_from_topic("test")
         assert plan.provider == "gemini"
         assert plan.model == "gemini-2.5-flash"
+
+
+# ---------------------------------------------------------------------------
+# PROVIDER_PRICING & estimate_cost
+# ---------------------------------------------------------------------------
+
+
+class TestProviderPricing:
+    def test_pricing_dict_has_entries(self) -> None:
+        assert len(PROVIDER_PRICING) > 0
+        for model_name, (inp, out) in PROVIDER_PRICING.items():
+            assert isinstance(model_name, str)
+            assert inp >= 0
+            assert out >= 0
+
+    def test_kimi_pricing(self) -> None:
+        assert "kimi-k2.5" in PROVIDER_PRICING
+        inp, out = PROVIDER_PRICING["kimi-k2.5"]
+        assert inp == 0.14
+        assert out == 0.28
+
+
+class TestEstimateCost:
+    def test_known_model(self) -> None:
+        cost = estimate_cost("gpt-4o", prompt_tokens=1_000_000, completion_tokens=0)
+        assert cost is not None
+        assert cost == pytest.approx(2.50)
+
+    def test_known_model_both_tokens(self) -> None:
+        cost = estimate_cost("gpt-4o", prompt_tokens=500_000, completion_tokens=500_000)
+        assert cost is not None
+        # 0.5M * 2.50/M + 0.5M * 10.00/M = 1.25 + 5.00 = 6.25
+        assert cost == pytest.approx(6.25)
+
+    def test_provider_prefix_stripped(self) -> None:
+        cost = estimate_cost(
+            "anthropic/claude-sonnet-4", prompt_tokens=1_000_000, completion_tokens=0
+        )
+        assert cost is not None
+        assert cost == pytest.approx(3.00)
+
+    def test_prefix_match(self) -> None:
+        """Model names that start with a known key should match."""
+        cost = estimate_cost("gpt-4o-2025-01-01", prompt_tokens=1_000_000, completion_tokens=0)
+        assert cost is not None
+
+    def test_unknown_model_returns_none(self) -> None:
+        cost = estimate_cost("my-local-model", prompt_tokens=1000, completion_tokens=1000)
+        assert cost is None
+
+    def test_zero_tokens(self) -> None:
+        cost = estimate_cost("gpt-4o", prompt_tokens=0, completion_tokens=0)
+        assert cost is not None
+        assert cost == 0.0
+
+    def test_ollama_returns_none(self) -> None:
+        cost = estimate_cost("llama3:8b", prompt_tokens=100_000, completion_tokens=50_000)
+        assert cost is None

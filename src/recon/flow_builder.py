@@ -6,9 +6,9 @@ Investigation (parallel) -> Verification (fact-checking) -> Synthesis (report)
 Incremental mode (default): phases with existing output files are skipped.
 Use force=True to re-run all phases regardless.
 
-When memory is enabled, the pipeline also:
+When knowledge is enabled, the pipeline also:
 - Queries prior knowledge before investigation
-- Ingests all outputs into memory after synthesis
+- Ingests all outputs into the knowledge store after synthesis
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _query_memory(plan: ReconPlan, audit: AuditLogger) -> str | None:
     Returns a formatted string of prior findings, or None if memory is
     disabled, unavailable, or has no relevant results.
     """
-    if not plan.memory.enabled:
+    if not plan.knowledge.enabled:
         return None
 
     try:
@@ -77,8 +77,8 @@ def _query_memory(plan: ReconPlan, audit: AuditLogger) -> str | None:
 
     try:
         store = MemoryStore(
-            path=plan.memory.path,
-            embedding_provider=plan.memory.embedding_provider,
+            path=plan.knowledge.db_path,
+            embedding_provider=plan.knowledge.embedder,
         )
         results = store.query(
             topic=plan.topic,
@@ -127,7 +127,7 @@ def _ingest_to_memory(
     audit: AuditLogger,
 ) -> None:
     """Ingest pipeline outputs into cross-run memory."""
-    if not plan.memory.enabled:
+    if not plan.knowledge.enabled:
         return
 
     try:
@@ -138,8 +138,8 @@ def _ingest_to_memory(
 
     try:
         store = MemoryStore(
-            path=plan.memory.path,
-            embedding_provider=plan.memory.embedding_provider,
+            path=plan.knowledge.db_path,
+            embedding_provider=plan.knowledge.embedder,
         )
 
         # Ingest research files
@@ -170,15 +170,15 @@ def _ingest_to_memory(
             phase="memory",
             agent="memory_store",
             action="ingest",
-            detail=f"Ingested {count} documents into {plan.memory.path}",
+            detail=f"Ingested {count} documents into {plan.knowledge.db_path}",
             metadata={
                 "documents_ingested": count,
                 "run_id": run_id,
                 "memory_stats": stats,
-                "memory_path": plan.memory.path,
+                "knowledge_db_path": plan.knowledge.db_path,
             },
         )
-        logger.info("Ingested %d documents into memory (%s)", count, plan.memory.path)
+        logger.info("Ingested %d documents into memory (%s)", count, plan.knowledge.db_path)
 
     except Exception:
         logger.warning(
@@ -250,7 +250,7 @@ def _write_run_manifest(
             "final_report": final_report,
             "sources_json": f"{plan.research_dir}/sources.json",
         },
-        "memory_enabled": plan.memory.enabled,
+        "knowledge_enabled": plan.knowledge.enabled,
     }
 
     manifest_path = Path(plan.output_dir) / f"{run_id}.json"

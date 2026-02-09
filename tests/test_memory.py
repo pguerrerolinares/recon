@@ -1,7 +1,10 @@
-"""Tests for recon.memory module.
+"""Tests for recon.memory module and KnowledgeConfig migration.
 
-All tests mock memvid-sdk since it's an optional dependency with a
-Rust binary that may not be installed in the test environment.
+All MemoryStore tests mock memvid-sdk since it's an optional dependency
+with a Rust binary that may not be installed in the test environment.
+
+The KnowledgeConfig tests verify the new schema and backward-compat
+migration from the legacy ``memory:`` YAML key.
 """
 
 from __future__ import annotations
@@ -9,49 +12,95 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
-from recon.config import MemoryConfig, ReconPlan
+from recon.config import KnowledgeConfig, MemoryConfig, ReconPlan
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
-# MemoryConfig model tests
+# KnowledgeConfig model tests
 # ---------------------------------------------------------------------------
 
 
-class TestMemoryConfig:
+class TestKnowledgeConfig:
     def test_defaults(self) -> None:
-        config = MemoryConfig()
-        assert config.enabled is False
-        assert config.path == "./memory/recon.mv2"
-        assert config.embedding_provider == "local"
+        config = KnowledgeConfig()
+        assert config.enabled is True
+        assert config.db_path == "./knowledge.db"
+        assert config.embedder == "onnx"
+        assert config.stale_after_days == 30
+
+    def test_memory_alias(self) -> None:
+        """MemoryConfig should be an alias for KnowledgeConfig."""
+        assert MemoryConfig is KnowledgeConfig
 
     def test_custom_config(self) -> None:
-        config = MemoryConfig(
-            enabled=True,
-            path="/data/knowledge.mv2",
-            embedding_provider="openai",
+        config = KnowledgeConfig(
+            enabled=False,
+            db_path="/data/knowledge.db",
+            embedder="ollama",
+            stale_after_days=60,
         )
+        assert config.enabled is False
+        assert config.db_path == "/data/knowledge.db"
+        assert config.embedder == "ollama"
+        assert config.stale_after_days == 60
+
+    def test_backward_compat_fields_accepted(self) -> None:
+        """Legacy fields 'path' and 'embedding_provider' should not error."""
+        config = KnowledgeConfig(
+            path="./memory/recon.mv2",
+            embedding_provider="local",
+        )
+        # Legacy fields are accepted but excluded from serialization
         assert config.enabled is True
-        assert config.path == "/data/knowledge.mv2"
-        assert config.embedding_provider == "openai"
+        assert config.db_path == "./knowledge.db"
 
-    def test_plan_includes_memory(self) -> None:
+    def test_plan_includes_knowledge(self) -> None:
         plan = ReconPlan(topic="Test")
-        assert plan.memory.enabled is False
-        assert plan.memory.path == "./memory/recon.mv2"
+        assert plan.knowledge.enabled is True
+        assert plan.knowledge.db_path == "./knowledge.db"
 
-    def test_plan_with_memory_enabled(self) -> None:
+    def test_plan_with_knowledge_disabled(self) -> None:
         plan = ReconPlan(
             topic="Test",
-            memory=MemoryConfig(enabled=True, path="./my-memory.mv2"),
+            knowledge=KnowledgeConfig(enabled=False),
         )
-        assert plan.memory.enabled is True
-        assert plan.memory.path == "./my-memory.mv2"
+        assert plan.knowledge.enabled is False
 
-    def test_plan_from_yaml(self, tmp_path: Path) -> None:
-        """Memory config should load from YAML plan files."""
+    def test_plan_with_knowledge_custom(self) -> None:
+        plan = ReconPlan(
+            topic="Test",
+            knowledge=KnowledgeConfig(
+                enabled=True, db_path="./my-knowledge.db", embedder="ollama"
+            ),
+        )
+        assert plan.knowledge.enabled is True
+        assert plan.knowledge.db_path == "./my-knowledge.db"
+        assert plan.knowledge.embedder == "ollama"
+
+    def test_plan_from_yaml_with_knowledge(self, tmp_path: Path) -> None:
+        """Knowledge config should load from YAML plan files."""
+        from recon.config import load_plan
+
+        plan_yaml = tmp_path / "plan.yaml"
+        plan_yaml.write_text(
+            "topic: Test\n"
+            "knowledge:\n"
+            "  enabled: true\n"
+            "  db_path: ./my-knowledge.db\n"
+            "  embedder: ollama\n"
+            "  stale_after_days: 14\n"
+        )
+        plan = load_plan(plan_yaml)
+        assert plan.knowledge.enabled is True
+        assert plan.knowledge.db_path == "./my-knowledge.db"
+        assert plan.knowledge.embedder == "ollama"
+        assert plan.knowledge.stale_after_days == 14
+
+    def test_plan_from_yaml_legacy_memory_key(self, tmp_path: Path) -> None:
+        """Legacy ``memory:`` YAML key should migrate to ``knowledge:``."""
         from recon.config import load_plan
 
         plan_yaml = tmp_path / "plan.yaml"
@@ -63,18 +112,26 @@ class TestMemoryConfig:
             "  embedding_provider: openai\n"
         )
         plan = load_plan(plan_yaml)
-        assert plan.memory.enabled is True
-        assert plan.memory.path == "./memory/project.mv2"
-        assert plan.memory.embedding_provider == "openai"
+        # The legacy memory key is migrated, and legacy fields are consumed
+        assert plan.knowledge.enabled is True
+        assert plan.knowledge.db_path == "./knowledge.db"  # path is ignored
 
-    def test_plan_without_memory_in_yaml(self, tmp_path: Path) -> None:
-        """Plans without memory section should use defaults."""
+    def test_plan_without_knowledge_in_yaml(self, tmp_path: Path) -> None:
+        """Plans without knowledge section should use defaults."""
         from recon.config import load_plan
 
         plan_yaml = tmp_path / "plan.yaml"
         plan_yaml.write_text("topic: Test\n")
         plan = load_plan(plan_yaml)
-        assert plan.memory.enabled is False
+        assert plan.knowledge.enabled is True
+
+    def test_memory_kwarg_migrated(self) -> None:
+        """Passing memory= kwarg should be migrated to knowledge."""
+        plan = ReconPlan(
+            topic="Test",
+            memory=KnowledgeConfig(enabled=False),  # type: ignore[call-arg]
+        )
+        assert plan.knowledge.enabled is False
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +461,7 @@ class TestFlowBuilderMemory:
             verify=False,
             research_dir=str(tmp_path / "research"),
             output_dir=str(tmp_path / "output"),
-            memory=MemoryConfig(enabled=True, path=str(tmp_path / "memory.mv2")),
+            knowledge=KnowledgeConfig(enabled=True, db_path=str(tmp_path / "knowledge.db")),
         )
 
         mock_query.return_value = "Prior: CrewAI has 44K stars"
@@ -452,7 +509,7 @@ class TestFlowBuilderMemory:
             verify=False,
             research_dir=str(tmp_path / "research"),
             output_dir=str(tmp_path / "output"),
-            # memory.enabled defaults to False
+            knowledge=KnowledgeConfig(enabled=False),
         )
 
         mock_query.return_value = None

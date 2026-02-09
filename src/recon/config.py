@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -133,21 +134,93 @@ class VerificationConfig(BaseModel):
     )
 
 
-class MemoryConfig(BaseModel):
-    """Cross-run memory configuration (requires memvid-sdk)."""
+class KnowledgeConfig(BaseModel):
+    """Knowledge persistence and cross-run memory configuration.
+
+    Replaces the legacy ``MemoryConfig``.  The knowledge layer uses a
+    SQLite database for structured claim/source storage and CrewAI's
+    built-in memory system (ChromaDB + ONNX embeddings) for semantic
+    retrieval during agent execution.
+    """
 
     enabled: bool = Field(
-        default=False,
-        description="Enable cross-run knowledge persistence via memvid.",
+        default=True,
+        description="Enable knowledge persistence across runs.",
     )
-    path: str = Field(
-        default="./memory/recon.mv2",
-        description="Path to the .mv2 memory file.",
+    db_path: str = Field(
+        default="./knowledge.db",
+        description="Path to the SQLite knowledge database.",
     )
-    embedding_provider: str = Field(
-        default="local",
-        description="Embedding provider for memory indexing: local | openai.",
+    embedder: str = Field(
+        default="onnx",
+        description="Embedding provider for CrewAI memory: onnx | ollama | openai.",
     )
+    stale_after_days: int = Field(
+        default=30,
+        ge=1,
+        le=365,
+        description="Claims older than this are flagged for re-verification.",
+    )
+
+    # --- Backward compatibility for YAML plans using the old schema ---
+    # These fields are accepted but ignored (silently consumed so that
+    # loading an old plan.yaml doesn't raise a validation error).
+    path: str | None = Field(default=None, exclude=True)
+    embedding_provider: str | None = Field(default=None, exclude=True)
+
+
+# Keep the old name importable for tests/code that reference it.
+MemoryConfig = KnowledgeConfig
+
+
+# Provider pricing: (input USD / 1M tokens, output USD / 1M tokens).
+# Used for cost estimation in token_usage tracking.
+PROVIDER_PRICING: dict[str, tuple[float, float]] = {
+    # Kimi
+    "kimi-k2.5": (0.14, 0.28),
+    # OpenAI
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "o1": (15.00, 60.00),
+    "o1-mini": (1.10, 4.40),
+    # Anthropic
+    "claude-sonnet-4": (3.00, 15.00),
+    "claude-opus-4": (15.00, 75.00),
+    # Google
+    "gemini-2.5-flash": (0.15, 0.60),
+    "gemini-2.5-pro": (1.25, 10.00),
+    # Meta via Groq / OpenRouter
+    "llama-4-maverick": (0.05, 0.25),
+    "llama-3.1-70b": (0.10, 0.20),
+}
+
+
+def estimate_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> float | None:
+    """Estimate USD cost based on token counts and known pricing.
+
+    Returns *None* when the model is not in :data:`PROVIDER_PRICING`
+    (e.g. local Ollama models).
+    """
+    # Strip provider prefix (e.g. "anthropic/claude-sonnet-4" → "claude-sonnet-4")
+    name = model.split("/")[-1] if "/" in model else model
+
+    # Exact match first, then prefix match
+    pricing = PROVIDER_PRICING.get(name)
+    if pricing is None:
+        for known, p in PROVIDER_PRICING.items():
+            if name.startswith(known):
+                pricing = p
+                break
+
+    if pricing is None:
+        return None
+
+    input_price, output_price = pricing
+    return (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
 
 
 class SynthesisConfig(BaseModel):
@@ -194,7 +267,21 @@ class ReconPlan(BaseModel):
     # Phase configs
     verification: VerificationConfig = VerificationConfig()
     synthesis: SynthesisConfig = SynthesisConfig()
-    memory: MemoryConfig = MemoryConfig()
+    knowledge: KnowledgeConfig = KnowledgeConfig()
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_memory_to_knowledge(cls, data: Any) -> Any:
+        """Accept legacy ``memory:`` YAML key and promote it to ``knowledge:``.
+
+        This allows old plan files with ``memory:`` sections and Python code
+        using ``memory=MemoryConfig(...)`` to keep working transparently.
+        """
+        if isinstance(data, dict) and "memory" in data:
+            mem = data.pop("memory")
+            if "knowledge" not in data:
+                data["knowledge"] = mem
+        return data
 
     @model_validator(mode="after")
     def sync_verify_flag(self) -> ReconPlan:

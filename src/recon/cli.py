@@ -64,7 +64,7 @@ def run(
     ] = False,
     memory: Annotated[
         str | None,
-        typer.Option("--memory", help="Path to .mv2 memory file for cross-run knowledge"),
+        typer.Option("--memory", help="Path to knowledge database for cross-run persistence"),
     ] = None,
     auto_questions: Annotated[
         bool,
@@ -110,10 +110,10 @@ def run(
     # Apply --auto-questions override
     plan.auto_questions = auto_questions
 
-    # Apply --memory override
+    # Apply --memory override (sets knowledge DB path)
     if memory:
-        plan.memory.enabled = True
-        plan.memory.path = memory
+        plan.knowledge.enabled = True
+        plan.knowledge.db_path = memory
 
     # Display plan summary
     investigations = plan.get_investigations()
@@ -129,8 +129,8 @@ def run(
     )
     if plan.focus:
         panel_content += f"\n[bold]Focus:[/] {plan.focus}"
-    if plan.memory.enabled:
-        panel_content += f"\n[bold]Memory:[/] {plan.memory.path}"
+    if plan.knowledge.enabled:
+        panel_content += f"\n[bold]Knowledge:[/] {plan.knowledge.db_path}"
 
     console.print(Panel(panel_content, title="Recon - Research Pipeline", border_style="blue"))
 

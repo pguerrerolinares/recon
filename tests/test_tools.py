@@ -77,7 +77,7 @@ class TestClaimExtractor:
         claims = extract_claims(str(doc))
         sourced = [c for c in claims if c.cited_source]
         assert len(sourced) >= 1
-        assert "github.com" in sourced[0].cited_source
+        assert sourced[0].cited_source is not None and "github.com" in sourced[0].cited_source
 
     def test_tool_interface(self, tmp_path: Path) -> None:
         doc = tmp_path / "test.md"
