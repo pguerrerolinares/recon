@@ -131,11 +131,11 @@ _BOLD_LABEL_RE = re.compile(r"\*\*\s*[:|\]]")
 # Matches bibliography/source entries: "Author - \"Title\"**" or "1. **Title**"
 _BIBLIOGRAPHY_RE = re.compile(
     r"(?:"
-    r'^\d+\.\s+\*\*'  # numbered list bold entry "1. **Title**"
-    r'|^-\s+URL:'  # "- URL: ..."
-    r'|^-\s+Access Date:'  # "- Access Date: ..."
-    r'|^-\s+Data:'  # "- Data: ..."
-    r'|\*\*\s*\((?:Nov|Dec|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct)\b'  # "** (Nov 2024)"
+    r"^\d+\.\s+\*\*"  # numbered list bold entry "1. **Title**"
+    r"|^-\s+URL:"  # "- URL: ..."
+    r"|^-\s+Access Date:"  # "- Access Date: ..."
+    r"|^-\s+Data:"  # "- Data: ..."
+    r"|\*\*\s*\((?:Nov|Dec|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct)\b"  # "** (Nov 2024)"
     r")",
     re.IGNORECASE | re.MULTILINE,
 )
@@ -222,8 +222,21 @@ def _is_incomplete_sentence(text: str) -> bool:
         # Allow things like "open-source" but reject "md and Model Context Protocol..."
         first_word = words[0] if words else ""
         continuation_words = {
-            "and", "or", "but", "nor", "yet", "so", "for",
-            "the", "a", "an", "md", "to", "of", "in", "on",
+            "and",
+            "or",
+            "but",
+            "nor",
+            "yet",
+            "so",
+            "for",
+            "the",
+            "a",
+            "an",
+            "md",
+            "to",
+            "of",
+            "in",
+            "on",
         }
         if first_word.lower().rstrip(".,;:") in continuation_words:
             return True
@@ -334,10 +347,7 @@ def _llm_filter_claims(
         return claims
 
     # Build input for the LLM
-    input_data = [
-        {"id": c.claim_id, "text": c.text, "type": c.claim_type}
-        for c in claims
-    ]
+    input_data = [{"id": c.claim_id, "text": c.text, "type": c.claim_type} for c in claims]
     prompt = _LLM_FILTER_PROMPT.format(claims_json=json.dumps(input_data, indent=2))
 
     try:
@@ -596,8 +606,6 @@ class ClaimExtractorTool(BaseTool):
         Returns:
             JSON string with list of claim dicts.
         """
-        claims = extract_claims(
-            document_path, max_claims=self.max_claims, llm=self.llm
-        )
+        claims = extract_claims(document_path, max_claims=self.max_claims, llm=self.llm)
         result = [c.to_dict() for c in claims]
         return json.dumps(result, indent=2)

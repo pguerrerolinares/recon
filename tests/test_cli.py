@@ -22,6 +22,7 @@ runner = CliRunner()
 # Shared fixture: seed a temp knowledge DB for the v0.3 commands
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def seeded_db(tmp_path: Path) -> Path:
     """Create and seed a knowledge DB, returning the path."""
@@ -359,25 +360,19 @@ class TestClaims:
         assert "CONTRADICTED" in result.output
 
     def test_claims_filter_by_status(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["claims", "--db", str(seeded_db), "--status", "VERIFIED"]
-        )
+        result = runner.invoke(app, ["claims", "--db", str(seeded_db), "--status", "VERIFIED"])
         assert result.exit_code == 0
         assert "clm-aaa" in result.output
         # clm-bbb is CONTRADICTED, should not appear
         assert "clm-bbb" not in result.output
 
     def test_claims_filter_by_run(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["claims", "--db", str(seeded_db), "--run", "run-001"]
-        )
+        result = runner.invoke(app, ["claims", "--db", str(seeded_db), "--run", "run-001"])
         assert result.exit_code == 0
         assert "clm-aaa" in result.output
 
     def test_claims_search_fts(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["claims", "--db", str(seeded_db), "--search", "quantum"]
-        )
+        result = runner.invoke(app, ["claims", "--db", str(seeded_db), "--search", "quantum"])
         assert result.exit_code == 0
         assert "clm-aaa" in result.output
 
@@ -389,9 +384,7 @@ class TestClaims:
         assert "No claims found" in result.output
 
     def test_claims_limit(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["claims", "--db", str(seeded_db), "--limit", "1"]
-        )
+        result = runner.invoke(app, ["claims", "--db", str(seeded_db), "--limit", "1"])
         assert result.exit_code == 0
         assert "1 results" in result.output
 
@@ -420,24 +413,18 @@ class TestHistory:
         assert result.exit_code == 1
 
     def test_history_claim_not_found(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["history", "clm-nonexistent", "--db", str(seeded_db)]
-        )
+        result = runner.invoke(app, ["history", "clm-nonexistent", "--db", str(seeded_db)])
         assert result.exit_code == 1
         assert "not found" in result.output.lower()
 
     def test_history_shows_claim_info(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["history", "clm-aaa", "--db", str(seeded_db)]
-        )
+        result = runner.invoke(app, ["history", "clm-aaa", "--db", str(seeded_db)])
         assert result.exit_code == 0
         assert "Quantum computers" in result.output
         assert "VERIFIED" in result.output
 
     def test_history_shows_entries(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["history", "clm-aaa", "--db", str(seeded_db)]
-        )
+        result = runner.invoke(app, ["history", "clm-aaa", "--db", str(seeded_db)])
         assert result.exit_code == 0
         assert "citation_check" in result.output
         # Rich may truncate long method names, so check prefix
@@ -445,18 +432,14 @@ class TestHistory:
         assert "run-001" in result.output
 
     def test_history_shows_confidence_values(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["history", "clm-aaa", "--db", str(seeded_db)]
-        )
+        result = runner.invoke(app, ["history", "clm-aaa", "--db", str(seeded_db)])
         assert result.exit_code == 0
         assert "92%" in result.output
         assert "95%" in result.output
 
     def test_history_claim_without_history(self, seeded_db: Path) -> None:
         """clm-bbb has no history entries."""
-        result = runner.invoke(
-            app, ["history", "clm-bbb", "--db", str(seeded_db)]
-        )
+        result = runner.invoke(app, ["history", "clm-bbb", "--db", str(seeded_db)])
         assert result.exit_code == 0
         assert "No verification history" in result.output
 
@@ -498,23 +481,17 @@ class TestStats:
         assert "Quantum computing" in result.output
 
     def test_stats_per_run(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["stats", "--db", str(seeded_db), "--run", "run-001"]
-        )
+        result = runner.invoke(app, ["stats", "--db", str(seeded_db), "--run", "run-001"])
         assert result.exit_code == 0
         assert "run-001" in result.output.lower() or "Run" in result.output
 
     def test_stats_per_run_shows_claims(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["stats", "--db", str(seeded_db), "--run", "run-001"]
-        )
+        result = runner.invoke(app, ["stats", "--db", str(seeded_db), "--run", "run-001"])
         assert result.exit_code == 0
         assert "Claims" in result.output
 
     def test_stats_per_run_shows_tokens(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["stats", "--db", str(seeded_db), "--run", "run-001"]
-        )
+        result = runner.invoke(app, ["stats", "--db", str(seeded_db), "--run", "run-001"])
         assert result.exit_code == 0
         assert "Token Usage" in result.output
         assert "7,000" in result.output
@@ -540,25 +517,19 @@ class TestReverify:
 
     def test_reverify_finds_stale_claims(self, seeded_db: Path) -> None:
         """clm-old was verified in 2024 — definitely stale at 30 days."""
-        result = runner.invoke(
-            app, ["reverify", "--db", str(seeded_db), "--days", "30"]
-        )
+        result = runner.invoke(app, ["reverify", "--db", str(seeded_db), "--days", "30"])
         assert result.exit_code == 0
         assert "clm-old" in result.output
         assert "Stale Claims" in result.output
 
     def test_reverify_no_stale_with_high_threshold(self, seeded_db: Path) -> None:
         """With --days=99999, nothing should be stale."""
-        result = runner.invoke(
-            app, ["reverify", "--db", str(seeded_db), "--days", "99999"]
-        )
+        result = runner.invoke(app, ["reverify", "--db", str(seeded_db), "--days", "99999"])
         assert result.exit_code == 0
         assert "No stale claims" in result.output
 
     def test_reverify_shows_recommendation(self, seeded_db: Path) -> None:
-        result = runner.invoke(
-            app, ["reverify", "--db", str(seeded_db), "--days", "30"]
-        )
+        result = runner.invoke(app, ["reverify", "--db", str(seeded_db), "--days", "30"])
         assert result.exit_code == 0
         assert "re-verification" in result.output.lower()
 

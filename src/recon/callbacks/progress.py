@@ -335,9 +335,7 @@ class ProgressTracker:
         if conn is not None and run_id:
             self._print_knowledge_summary(conn, run_id)
 
-    def _print_knowledge_summary(
-        self, conn: sqlite3.Connection, run_id: str
-    ) -> None:
+    def _print_knowledge_summary(self, conn: sqlite3.Connection, run_id: str) -> None:
         """Print a compact knowledge DB summary for the current run."""
         with contextlib.suppress(Exception):
             from recon.db import get_run_stats
@@ -364,17 +362,13 @@ class ProgressTracker:
             if total_tokens > 0:
                 cost = tokens.get("total_cost", 0)
                 cost_str = f" (${cost:.4f})" if cost else ""
-                self.console.print(
-                    f"Tokens: [bold]{total_tokens:,}[/]{cost_str}"
-                )
+                self.console.print(f"Tokens: [bold]{total_tokens:,}[/]{cost_str}")
 
             sources = data.get("sources", {})
             unique = sources.get("unique_sources", 0)
             if unique > 0:
                 domains = sources.get("unique_domains", 0)
-                self.console.print(
-                    f"Sources: [bold]{unique}[/] URLs from {domains} domains"
-                )
+                self.console.print(f"Sources: [bold]{unique}[/] URLs from {domains} domains")
 
     def _log_event(self, event_type: str, subject: str, detail: str = "") -> None:
         """Log an event for later analysis."""

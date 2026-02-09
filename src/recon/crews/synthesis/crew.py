@@ -88,13 +88,15 @@ def _build_claims_context(
 
         summary: list[dict[str, Any]] = []
         for c in claims:
-            summary.append({
-                "id": c["id"],
-                "text": c["text"],
-                "status": c.get("verification_status", "unknown"),
-                "confidence": c.get("confidence"),
-                "source": c.get("cited_source", ""),
-            })
+            summary.append(
+                {
+                    "id": c["id"],
+                    "text": c["text"],
+                    "status": c.get("verification_status", "unknown"),
+                    "confidence": c.get("confidence"),
+                    "source": c.get("cited_source", ""),
+                }
+            )
 
         # Group by status for quick reference
         by_status: dict[str, int] = {}

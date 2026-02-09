@@ -117,18 +117,14 @@ class TestSchema:
         conn.close()
 
     def test_schema_version_stored(self, conn: sqlite3.Connection) -> None:
-        row = conn.execute(
-            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()
         assert row is not None
         assert int(row["value"]) == SCHEMA_VERSION
 
     def test_tables_exist(self, conn: sqlite3.Connection) -> None:
         tables = {
             r["name"]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         expected_main = {
             "schema_meta",
@@ -179,9 +175,7 @@ class TestSchema:
         raw.close()
 
         conn = get_db(db_path)
-        row = conn.execute(
-            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
-        ).fetchone()
+        row = conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()
         assert row is not None
         conn.close()
 

@@ -69,9 +69,7 @@ class TestKnowledgeConfig:
     def test_plan_with_knowledge_custom(self) -> None:
         plan = ReconPlan(
             topic="Test",
-            knowledge=KnowledgeConfig(
-                enabled=True, db_path="./my-knowledge.db", embedder="ollama"
-            ),
+            knowledge=KnowledgeConfig(enabled=True, db_path="./my-knowledge.db", embedder="ollama"),
         )
         assert plan.knowledge.enabled is True
         assert plan.knowledge.db_path == "./my-knowledge.db"

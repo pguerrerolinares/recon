@@ -209,8 +209,12 @@ class TestRecordTokenUsage:
 
         conn = get_db(tmp_path / "token.db")
         insert_run(
-            conn, run_id="run-tok", timestamp="2026-01-15T10:00:00Z",
-            topic="test", depth="quick", model="kimi-k2.5",
+            conn,
+            run_id="run-tok",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+            model="kimi-k2.5",
         )
 
         mock_output = MagicMock()
@@ -248,8 +252,11 @@ class TestRecordTokenUsage:
 
         conn = get_db(tmp_path / "token.db")
         insert_run(
-            conn, run_id="run-no", timestamp="2026-01-15T10:00:00Z",
-            topic="test", depth="quick",
+            conn,
+            run_id="run-no",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
         )
 
         # CrewOutput without token_usage attribute
@@ -299,21 +306,26 @@ class TestQueryPriorKnowledge:
 
         conn = get_db(tmp_path / "prior.db")
         insert_run(
-            conn, run_id="run-old", timestamp="2026-01-10T10:00:00Z",
-            topic="AI agents", depth="standard",
+            conn,
+            run_id="run-old",
+            timestamp="2026-01-10T10:00:00Z",
+            topic="AI agents",
+            depth="standard",
         )
         upsert_claim(
-            conn, claim_id="c-old-1", text="CrewAI has 44K GitHub stars",
-            verification_status="VERIFIED", confidence=0.92,
-            run_id="run-old", timestamp="2026-01-10T10:05:00Z",
+            conn,
+            claim_id="c-old-1",
+            text="CrewAI has 44K GitHub stars",
+            verification_status="VERIFIED",
+            confidence=0.92,
+            run_id="run-old",
+            timestamp="2026-01-10T10:05:00Z",
             topic_tags=["AI", "agents"],
         )
 
         plan = ReconPlan(
             topic="AI agents",
-            knowledge=KnowledgeConfig(
-                enabled=True, db_path=str(tmp_path / "prior.db")
-            ),
+            knowledge=KnowledgeConfig(enabled=True, db_path=str(tmp_path / "prior.db")),
         )
         audit = AuditLogger(output_dir=str(tmp_path), run_id="run-new")
 
@@ -342,9 +354,7 @@ class TestQueryPriorKnowledge:
         conn = get_db(tmp_path / "empty.db")
         plan = ReconPlan(
             topic="completely unknown topic xyz",
-            knowledge=KnowledgeConfig(
-                enabled=True, db_path=str(tmp_path / "empty.db")
-            ),
+            knowledge=KnowledgeConfig(enabled=True, db_path=str(tmp_path / "empty.db")),
         )
         audit = AuditLogger(output_dir=str(tmp_path), run_id="run-empty")
 
@@ -809,7 +819,9 @@ class TestVerificationCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
         crew = build_verification_crew(
-            plan=plan, llm=MagicMock(), search_tools=[MagicMock()],
+            plan=plan,
+            llm=MagicMock(),
+            search_tools=[MagicMock()],
             research_dir=str(research_dir),
         )
 
@@ -838,7 +850,9 @@ class TestVerificationCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
         build_verification_crew(
-            plan=plan, llm=MagicMock(), search_tools=[],
+            plan=plan,
+            llm=MagicMock(),
+            search_tools=[],
             research_dir=str(research_dir),
         )
 
@@ -864,7 +878,9 @@ class TestVerificationCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
         build_verification_crew(
-            plan=plan, llm=MagicMock(), search_tools=[],
+            plan=plan,
+            llm=MagicMock(),
+            search_tools=[],
             research_dir=str(research_dir),
         )
 
@@ -881,7 +897,9 @@ class TestVerificationCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
         result = build_verification_crew(
-            plan=plan, llm=MagicMock(), search_tools=[],
+            plan=plan,
+            llm=MagicMock(),
+            search_tools=[],
             research_dir=str(empty_dir),
         )
         assert result is None
@@ -901,8 +919,11 @@ class TestVerificationCrew:
 
         conn = get_db(tmp_path / "ver.db")
         insert_run(
-            conn, run_id="run-ver", timestamp="2026-01-15T10:00:00Z",
-            topic="test", depth="quick",
+            conn,
+            run_id="run-ver",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
         )
 
         research_dir = tmp_path / "research"
@@ -911,9 +932,12 @@ class TestVerificationCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
         build_verification_crew(
-            plan=plan, llm=MagicMock(), search_tools=[],
+            plan=plan,
+            llm=MagicMock(),
+            search_tools=[],
             research_dir=str(research_dir),
-            conn=conn, run_id="run-ver",
+            conn=conn,
+            run_id="run-ver",
         )
 
         # SourceTrackerTool should have conn and run_id
@@ -973,13 +997,20 @@ class TestPriorClaimsContext:
 
         conn = get_db(tmp_path / "prior.db")
         insert_run(
-            conn, run_id="run-old", timestamp="2026-01-10T10:00:00Z",
-            topic="AI", depth="quick",
+            conn,
+            run_id="run-old",
+            timestamp="2026-01-10T10:00:00Z",
+            topic="AI",
+            depth="quick",
         )
         upsert_claim(
-            conn, claim_id="c1", text="CrewAI has 44K stars",
-            verification_status="VERIFIED", confidence=0.9,
-            run_id="run-old", timestamp="2026-01-10T10:00:00Z",
+            conn,
+            claim_id="c1",
+            text="CrewAI has 44K stars",
+            verification_status="VERIFIED",
+            confidence=0.9,
+            run_id="run-old",
+            timestamp="2026-01-10T10:00:00Z",
             topic_tags=["AI"],
         )
 
@@ -999,13 +1030,20 @@ class TestPriorClaimsContext:
 
         conn = get_db(tmp_path / "stale.db")
         insert_run(
-            conn, run_id="run-old", timestamp="2025-01-01T10:00:00Z",
-            topic="test", depth="quick",
+            conn,
+            run_id="run-old",
+            timestamp="2025-01-01T10:00:00Z",
+            topic="test",
+            depth="quick",
         )
         upsert_claim(
-            conn, claim_id="stale-1", text="Old claim about AI",
-            verification_status="VERIFIED", confidence=0.8,
-            run_id="run-old", timestamp="2025-01-01T10:00:00Z",
+            conn,
+            claim_id="stale-1",
+            text="Old claim about AI",
+            verification_status="VERIFIED",
+            confidence=0.8,
+            run_id="run-old",
+            timestamp="2025-01-01T10:00:00Z",
             topic_tags=["AI"],
         )
 
@@ -1047,7 +1085,9 @@ class TestSynthesisCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK)
         build_synthesis_crew(
-            plan=plan, llm=MagicMock(), research_dir=str(research),
+            plan=plan,
+            llm=MagicMock(),
+            research_dir=str(research),
         )
 
         crew_kwargs = mock_crew_cls.call_args[1]
@@ -1072,7 +1112,9 @@ class TestSynthesisCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK)
         build_synthesis_crew(
-            plan=plan, llm=MagicMock(), research_dir=str(research),
+            plan=plan,
+            llm=MagicMock(),
+            research_dir=str(research),
         )
 
         # Check agent backstory mentions inline citations
@@ -1095,13 +1137,20 @@ class TestSynthesisCrew:
 
         conn = get_db(tmp_path / "syn.db")
         insert_run(
-            conn, run_id="run-syn", timestamp="2026-01-15T10:00:00Z",
-            topic="test", depth="quick",
+            conn,
+            run_id="run-syn",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
         )
         upsert_claim(
-            conn, claim_id="c1", text="Revenue is $1B",
-            verification_status="VERIFIED", confidence=0.9,
-            run_id="run-syn", timestamp="2026-01-15T10:00:00Z",
+            conn,
+            claim_id="c1",
+            text="Revenue is $1B",
+            verification_status="VERIFIED",
+            confidence=0.9,
+            run_id="run-syn",
+            timestamp="2026-01-15T10:00:00Z",
         )
 
         research = tmp_path / "research"
@@ -1110,8 +1159,11 @@ class TestSynthesisCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK)
         build_synthesis_crew(
-            plan=plan, llm=MagicMock(), research_dir=str(research),
-            conn=conn, run_id="run-syn",
+            plan=plan,
+            llm=MagicMock(),
+            research_dir=str(research),
+            conn=conn,
+            run_id="run-syn",
         )
 
         # Task description should contain claims data
@@ -1138,7 +1190,9 @@ class TestSynthesisCrew:
 
         plan = ReconPlan(topic="Test", depth=Depth.QUICK)
         build_synthesis_crew(
-            plan=plan, llm=MagicMock(), research_dir=str(research),
+            plan=plan,
+            llm=MagicMock(),
+            research_dir=str(research),
         )
 
         task_kwargs = mock_task_cls.call_args[1]
@@ -1154,13 +1208,20 @@ class TestBuildClaimsContext:
 
         conn = get_db(tmp_path / "ctx.db")
         insert_run(
-            conn, run_id="run-ctx", timestamp="2026-01-15T10:00:00Z",
-            topic="test", depth="quick",
+            conn,
+            run_id="run-ctx",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
         )
         upsert_claim(
-            conn, claim_id="c1", text="Test claim",
-            verification_status="VERIFIED", confidence=0.95,
-            run_id="run-ctx", timestamp="2026-01-15T10:00:00Z",
+            conn,
+            claim_id="c1",
+            text="Test claim",
+            verification_status="VERIFIED",
+            confidence=0.95,
+            run_id="run-ctx",
+            timestamp="2026-01-15T10:00:00Z",
         )
 
         result = _build_claims_context(conn, "run-ctx")
@@ -1188,8 +1249,11 @@ class TestBuildClaimsContext:
 
         conn = get_db(tmp_path / "ctx.db")
         insert_run(
-            conn, run_id="run-empty", timestamp="2026-01-15T10:00:00Z",
-            topic="test", depth="quick",
+            conn,
+            run_id="run-empty",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
         )
         assert _build_claims_context(conn, "run-empty") == ""
         conn.close()

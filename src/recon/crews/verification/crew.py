@@ -204,9 +204,7 @@ def build_verification_crew(
 
     # Build knowledge context from prior runs
     prior_claims_ctx = _get_prior_claims_context(conn, plan.topic)
-    stale_claims_ctx = _get_stale_claims_context(
-        conn, plan.topic, plan.knowledge.stale_after_days
-    )
+    stale_claims_ctx = _get_stale_claims_context(conn, plan.topic, plan.knowledge.stale_after_days)
 
     # Build the verification agent with budget-aware instructions
     backstory = (
@@ -333,9 +331,9 @@ def build_verification_crew(
             _db.insert_event(
                 conn,
                 run_id=run_id,
-                timestamp=__import__("datetime").datetime.now(
-                    __import__("datetime").UTC
-                ).isoformat(),
+                timestamp=__import__("datetime")
+                .datetime.now(__import__("datetime").UTC)
+                .isoformat(),
                 action="stale_claims_loaded",
                 phase="verification",
                 agent="pipeline",

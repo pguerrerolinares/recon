@@ -159,14 +159,9 @@ def _query_prior_knowledge(
             status = claim.get("verification_status", "unknown")
             conf = claim.get("confidence")
             conf_str = f" (confidence: {conf:.0%})" if conf else ""
-            parts.append(
-                f"{i}. [{status}]{conf_str} {claim['text']}"
-            )
+            parts.append(f"{i}. [{status}]{conf_str} {claim['text']}")
 
-        prior = (
-            "PRIOR VERIFIED CLAIMS (from previous runs):\n\n"
-            + "\n".join(parts)
-        )
+        prior = "PRIOR VERIFIED CLAIMS (from previous runs):\n\n" + "\n".join(parts)
         audit.log(
             phase="knowledge",
             agent="knowledge_db",
@@ -174,9 +169,7 @@ def _query_prior_knowledge(
             detail=f"Found {len(results)} prior claims for '{plan.topic}'",
             metadata={"results_count": len(results), "topic": plan.topic},
         )
-        logger.info(
-            "Found %d prior claims for topic '%s'", len(results), plan.topic
-        )
+        logger.info("Found %d prior claims for topic '%s'", len(results), plan.topic)
         return prior
     except Exception:
         logger.debug("FTS5 query failed", exc_info=True)
@@ -403,7 +396,9 @@ def build_and_run(
                 if conn is not None and inv_metric_id:
                     with contextlib.suppress(Exception):
                         _db.update_phase_metric(
-                            conn, inv_metric_id, status="error",
+                            conn,
+                            inv_metric_id,
+                            status="error",
                             ended_at=datetime.now(UTC).isoformat(),
                         )
                 raise
@@ -434,9 +429,7 @@ def build_and_run(
         # Post-process: extract and deduplicate sources
         from recon.tools.source_extractor import write_sources_json
 
-        sources_summary = write_sources_json(
-            plan.research_dir, conn=conn, run_id=run_id
-        )
+        sources_summary = write_sources_json(plan.research_dir, conn=conn, run_id=run_id)
         audit.log(
             phase="investigation",
             agent="source_extractor",
@@ -466,7 +459,10 @@ def build_and_run(
                 if conn is not None:
                     with contextlib.suppress(Exception):
                         _db.insert_phase_metric(
-                            conn, run_id=run_id, phase="verification", status="skipped",
+                            conn,
+                            run_id=run_id,
+                            phase="verification",
+                            status="skipped",
                         )
             else:
                 progress.phase_start("verification")
@@ -515,13 +511,9 @@ def build_and_run(
                         verification_report = f"{plan.verification_dir}/report.md"
                         ver_ended = datetime.now(UTC)
                         progress.phase_end("verification", verification_report)
-                        audit.log_phase_end(
-                            "verification", output_files=[verification_report]
-                        )
+                        audit.log_phase_end("verification", output_files=[verification_report])
 
-                        _record_token_usage(
-                            conn, run_id, "verification", plan.model, ver_result
-                        )
+                        _record_token_usage(conn, run_id, "verification", plan.model, ver_result)
 
                         if conn is not None and ver_metric_id:
                             with contextlib.suppress(Exception):
@@ -530,9 +522,7 @@ def build_and_run(
                                     ver_metric_id,
                                     status="done",
                                     ended_at=ver_ended.isoformat(),
-                                    duration_seconds=(
-                                        ver_ended - ver_started
-                                    ).total_seconds(),
+                                    duration_seconds=(ver_ended - ver_started).total_seconds(),
                                     output_files=[verification_report],
                                 )
                     except _PhaseTimeoutError:
@@ -552,7 +542,9 @@ def build_and_run(
                         if conn is not None and ver_metric_id:
                             with contextlib.suppress(Exception):
                                 _db.update_phase_metric(
-                                    conn, ver_metric_id, status="timeout",
+                                    conn,
+                                    ver_metric_id,
+                                    status="timeout",
                                     ended_at=datetime.now(UTC).isoformat(),
                                 )
                     except Exception as e:
@@ -561,7 +553,9 @@ def build_and_run(
                         if conn is not None and ver_metric_id:
                             with contextlib.suppress(Exception):
                                 _db.update_phase_metric(
-                                    conn, ver_metric_id, status="error",
+                                    conn,
+                                    ver_metric_id,
+                                    status="error",
                                     ended_at=datetime.now(UTC).isoformat(),
                                 )
                         # Verification failure is non-fatal.
@@ -576,14 +570,19 @@ def build_and_run(
                     if conn is not None and ver_metric_id:
                         with contextlib.suppress(Exception):
                             _db.update_phase_metric(
-                                conn, ver_metric_id, status="skipped",
+                                conn,
+                                ver_metric_id,
+                                status="skipped",
                             )
         else:
             progress.phase_skip("verification", "disabled")
             if conn is not None:
                 with contextlib.suppress(Exception):
                     _db.insert_phase_metric(
-                        conn, run_id=run_id, phase="verification", status="disabled",
+                        conn,
+                        run_id=run_id,
+                        phase="verification",
+                        status="disabled",
                     )
 
         # --- Phase 3: Synthesis ---
@@ -598,7 +597,10 @@ def build_and_run(
             if conn is not None:
                 with contextlib.suppress(Exception):
                     _db.insert_phase_metric(
-                        conn, run_id=run_id, phase="synthesis", status="skipped",
+                        conn,
+                        run_id=run_id,
+                        phase="synthesis",
+                        status="skipped",
                     )
         else:
             progress.phase_start("synthesis")
@@ -634,7 +636,9 @@ def build_and_run(
                 if conn is not None and syn_metric_id:
                     with contextlib.suppress(Exception):
                         _db.update_phase_metric(
-                            conn, syn_metric_id, status="error",
+                            conn,
+                            syn_metric_id,
+                            status="error",
                             ended_at=datetime.now(UTC).isoformat(),
                         )
                 raise

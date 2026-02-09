@@ -92,7 +92,9 @@ def verify_semantically(
     # Truncate evidence to avoid blowing context
     truncated = evidence[:3000]
     prompt = _JUDGE_PROMPT.format(
-        claim=claim, evidence=truncated, url=url,
+        claim=claim,
+        evidence=truncated,
+        url=url,
     )
 
     try:
@@ -188,13 +190,15 @@ class SemanticVerifierTool(BaseTool):
         assert data is not None
 
         if self.llm is None:
-            return json.dumps({
-                "verdict": "INSUFFICIENT",
-                "confidence": 0.0,
-                "reasoning": "No LLM configured for semantic verification.",
-                "claim": data.get("claim", ""),
-                "url": data.get("url", ""),
-            })
+            return json.dumps(
+                {
+                    "verdict": "INSUFFICIENT",
+                    "confidence": 0.0,
+                    "reasoning": "No LLM configured for semantic verification.",
+                    "claim": data.get("claim", ""),
+                    "url": data.get("url", ""),
+                }
+            )
 
         result = verify_semantically(
             claim=data.get("claim", ""),

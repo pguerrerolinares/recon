@@ -190,9 +190,11 @@ class TestClaimExtractor:
         doc = tmp_path / "test.md"
         doc.write_text("Revenue reached $10M in 2025.\n")
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json("Revenue reached $10M in 2025."),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json("Revenue reached $10M in 2025."),
+            ]
+        )
         tool = ClaimExtractorTool(llm=mock_llm)
         result = json.loads(tool._run(str(doc)))
         assert len(result) >= 1
@@ -435,18 +437,17 @@ class TestLLMFilter:
 
     def _make_claims(self, texts: list[str]) -> list[Claim]:
         """Helper to create Claim objects from text list."""
-        return [
-            Claim(f"C{i+1}", text, "doc.md", "statistic")
-            for i, text in enumerate(texts)
-        ]
+        return [Claim(f"C{i + 1}", text, "doc.md", "statistic") for i, text in enumerate(texts)]
 
     def test_keeps_valid_claims(self) -> None:
         """LLM marks claims as keep=True -> they survive."""
         claims = self._make_claims([self._REV])
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(self._REV),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(self._REV),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 1
         assert "$10M" in result[0].text
@@ -456,10 +457,12 @@ class TestLLMFilter:
         garbage = "Type**: Open-source AI code assistant"
         claims = self._make_claims([self._REV, garbage])
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(self._REV),
-            _claim_json(garbage, keep=False, reason="fragment"),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(self._REV),
+                _claim_json(garbage, keep=False, reason="fragment"),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 1
         assert "Revenue" in result[0].text
@@ -469,12 +472,14 @@ class TestLLMFilter:
         compound = "Founded in 2020 with $50M funding and 100 employees."
         claims = self._make_claims([compound])
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(compound, keep=False, reason="compound"),
-            _claim_json("The company was founded in 2020.", "date"),
-            _claim_json("The company received $50M in funding."),
-            _claim_json("The company had 100 employees."),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(compound, keep=False, reason="compound"),
+                _claim_json("The company was founded in 2020.", "date"),
+                _claim_json("The company received $50M in funding."),
+                _claim_json("The company had 100 employees."),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 3
         assert result[0].claim_id == "C1"
@@ -511,9 +516,11 @@ class TestLLMFilter:
         """LLM rejects everything -> returns original claims as fallback."""
         claims = self._make_claims([self._REV])
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(self._REV, keep=False, reason="rejected"),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(self._REV, keep=False, reason="rejected"),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 1  # fallback to originals
         assert result[0].text == self._REV
@@ -523,9 +530,7 @@ class TestLLMFilter:
         claims = self._make_claims([self._REV])
         mock_llm = MagicMock()
         fenced = json.dumps([_claim_json(self._REV)])
-        mock_llm.call.return_value = (
-            "```json\n" + fenced + "\n```"
-        )
+        mock_llm.call.return_value = "```json\n" + fenced + "\n```"
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 1
         assert "$10M" in result[0].text
@@ -541,14 +546,19 @@ class TestLLMFilter:
         """LLM-filtered claims should inherit cited_source."""
         claims = [
             Claim(
-                "C1", self._REV, "doc.md",
-                "statistic", "https://example.com",
+                "C1",
+                self._REV,
+                "doc.md",
+                "statistic",
+                "https://example.com",
             ),
         ]
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(self._REV),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(self._REV),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 1
         assert result[0].cited_source == "https://example.com"
@@ -557,9 +567,11 @@ class TestLLMFilter:
         """Invalid claim types from LLM should default to 'statistic'."""
         claims = self._make_claims([self._REV])
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(self._REV, typ="invalid_type"),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(self._REV, typ="invalid_type"),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert result[0].claim_type == "statistic"
 
@@ -567,10 +579,12 @@ class TestLLMFilter:
         """Claims shorter than 15 chars from LLM should be rejected."""
         claims = self._make_claims([self._REV])
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json("short"),
-            _claim_json(self._REV),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json("short"),
+                _claim_json(self._REV),
+            ]
+        )
         result = _llm_filter_claims(claims, mock_llm)
         assert len(result) == 1
         assert "Revenue" in result[0].text
@@ -588,16 +602,16 @@ class TestExtractClaimsWithLLM:
         """extract_claims with llm= should apply LLM filtering."""
         doc = tmp_path / "test.md"
         doc.write_text(
-            "# Report\n\n"
-            "Revenue reached $10M in 2025.\n"
-            "The company has 5000 users globally.\n"
+            "# Report\n\nRevenue reached $10M in 2025.\nThe company has 5000 users globally.\n"
         )
         users = "The company has 5000 users globally."
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps([
-            _claim_json(self._REV),
-            _claim_json(users),
-        ])
+        mock_llm.call.return_value = json.dumps(
+            [
+                _claim_json(self._REV),
+                _claim_json(users),
+            ]
+        )
         claims = extract_claims(str(doc), llm=mock_llm)
         assert len(claims) >= 1
         mock_llm.call.assert_called_once()
@@ -610,22 +624,17 @@ class TestExtractClaimsWithLLM:
         assert len(claims) >= 1
 
     def test_llm_filter_applied_before_prioritization(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """LLM filter runs before max_claims prioritization."""
         doc = tmp_path / "test.md"
-        lines = [
-            f"Revenue reached ${i}M in 2025.\n"
-            for i in range(1, 21)
-        ]
+        lines = [f"Revenue reached ${i}M in 2025.\n" for i in range(1, 21)]
         doc.write_text("# Report\n\n" + "".join(lines))
 
         # LLM keeps only 5 claims
         mock_llm = MagicMock()
-        kept = [
-            _claim_json(f"Revenue reached ${i}M in 2025.")
-            for i in range(1, 6)
-        ]
+        kept = [_claim_json(f"Revenue reached ${i}M in 2025.") for i in range(1, 6)]
         mock_llm.call.return_value = json.dumps(kept)
 
         claims = extract_claims(str(doc), max_claims=3, llm=mock_llm)
@@ -981,9 +990,7 @@ class TestSourceTrackerDB:
             run_id="run-track",
         )
 
-        rows = conn.execute(
-            "SELECT * FROM claim_sources WHERE claim_id = ?", ("C1",)
-        ).fetchall()
+        rows = conn.execute("SELECT * FROM claim_sources WHERE claim_id = ?", ("C1",)).fetchall()
         assert len(rows) == 1
         assert rows[0]["domain"] == "example.com"
         assert rows[0]["support_type"] == "supports"
@@ -1266,38 +1273,50 @@ class TestSemanticVerifier:
 
     def test_supports_verdict(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "SUPPORTS",
-            "confidence": 0.95,
-            "reasoning": "Evidence confirms 44K stars.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "SUPPORTS",
+                "confidence": 0.95,
+                "reasoning": "Evidence confirms 44K stars.",
+            }
+        )
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
         )
         assert result["verdict"] == "SUPPORTS"
         assert result["confidence"] == 0.95
 
     def test_contradicts_verdict(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "CONTRADICTS",
-            "confidence": 0.9,
-            "reasoning": "Page says 10K stars, not 44K.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "CONTRADICTS",
+                "confidence": 0.9,
+                "reasoning": "Page says 10K stars, not 44K.",
+            }
+        )
         result = verify_semantically(
-            self._CLAIM, "The repo has 10K stars.", mock_llm,
+            self._CLAIM,
+            "The repo has 10K stars.",
+            mock_llm,
         )
         assert result["verdict"] == "CONTRADICTS"
 
     def test_insufficient_verdict(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "INSUFFICIENT",
-            "confidence": 0.3,
-            "reasoning": "Page mentions CrewAI but no star count.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "INSUFFICIENT",
+                "confidence": 0.3,
+                "reasoning": "Page mentions CrewAI but no star count.",
+            }
+        )
         result = verify_semantically(
-            self._CLAIM, "CrewAI is a framework.", mock_llm,
+            self._CLAIM,
+            "CrewAI is a framework.",
+            mock_llm,
         )
         assert result["verdict"] == "INSUFFICIENT"
 
@@ -1305,7 +1324,9 @@ class TestSemanticVerifier:
         mock_llm = MagicMock()
         mock_llm.call.side_effect = RuntimeError("API error")
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
         )
         assert result["verdict"] == "INSUFFICIENT"
         assert result["confidence"] == 0.0
@@ -1314,7 +1335,9 @@ class TestSemanticVerifier:
         mock_llm = MagicMock()
         mock_llm.call.return_value = "Not JSON at all"
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
         )
         assert result["verdict"] == "INSUFFICIENT"
         assert result["confidence"] == 0.0
@@ -1322,7 +1345,9 @@ class TestSemanticVerifier:
     def test_empty_evidence(self) -> None:
         mock_llm = MagicMock()
         result = verify_semantically(
-            self._CLAIM, "", mock_llm,
+            self._CLAIM,
+            "",
+            mock_llm,
         )
         assert result["verdict"] == "INSUFFICIENT"
         mock_llm.call.assert_not_called()
@@ -1330,50 +1355,61 @@ class TestSemanticVerifier:
     def test_strips_markdown_fences(self) -> None:
         mock_llm = MagicMock()
         fenced = (
-            "```json\n"
-            '{"verdict": "SUPPORTS", "confidence": 0.9, '
-            '"reasoning": "Confirmed."}\n'
-            "```"
+            '```json\n{"verdict": "SUPPORTS", "confidence": 0.9, "reasoning": "Confirmed."}\n```'
         )
         mock_llm.call.return_value = fenced
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
         )
         assert result["verdict"] == "SUPPORTS"
 
     def test_invalid_verdict_falls_back(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "MAYBE",
-            "confidence": 0.5,
-            "reasoning": "Unclear.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "MAYBE",
+                "confidence": 0.5,
+                "reasoning": "Unclear.",
+            }
+        )
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
         )
         assert result["verdict"] == "INSUFFICIENT"
 
     def test_confidence_clamped(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "SUPPORTS",
-            "confidence": 5.0,
-            "reasoning": "Very confident.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "SUPPORTS",
+                "confidence": 5.0,
+                "reasoning": "Very confident.",
+            }
+        )
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
         )
         assert result["confidence"] <= 1.0
 
     def test_url_passed_through(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "SUPPORTS",
-            "confidence": 0.9,
-            "reasoning": "OK.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "SUPPORTS",
+                "confidence": 0.9,
+                "reasoning": "OK.",
+            }
+        )
         result = verify_semantically(
-            self._CLAIM, self._EVIDENCE, mock_llm,
+            self._CLAIM,
+            self._EVIDENCE,
+            mock_llm,
             url="https://github.com/crewAIInc/crewAI",
         )
         assert result["url"] == "https://github.com/crewAIInc/crewAI"
@@ -1382,25 +1418,35 @@ class TestSemanticVerifier:
 
     def test_tool_interface(self) -> None:
         mock_llm = MagicMock()
-        mock_llm.call.return_value = json.dumps({
-            "verdict": "SUPPORTS",
-            "confidence": 0.9,
-            "reasoning": "OK.",
-        })
+        mock_llm.call.return_value = json.dumps(
+            {
+                "verdict": "SUPPORTS",
+                "confidence": 0.9,
+                "reasoning": "OK.",
+            }
+        )
         tool = SemanticVerifierTool(llm=mock_llm)
-        result = tool._run(json.dumps({
-            "claim": self._CLAIM,
-            "evidence": self._EVIDENCE,
-        }))
+        result = tool._run(
+            json.dumps(
+                {
+                    "claim": self._CLAIM,
+                    "evidence": self._EVIDENCE,
+                }
+            )
+        )
         parsed = json.loads(result)
         assert parsed["verdict"] == "SUPPORTS"
 
     def test_tool_no_llm(self) -> None:
         tool = SemanticVerifierTool(llm=None)
-        result = tool._run(json.dumps({
-            "claim": self._CLAIM,
-            "evidence": self._EVIDENCE,
-        }))
+        result = tool._run(
+            json.dumps(
+                {
+                    "claim": self._CLAIM,
+                    "evidence": self._EVIDENCE,
+                }
+            )
+        )
         parsed = json.loads(result)
         assert parsed["verdict"] == "INSUFFICIENT"
         assert "No LLM" in parsed["reasoning"]

@@ -563,8 +563,10 @@ def history(
             f"[bold]Status:[/] {claim.get('verification_status', '?')} "
             f"(confidence: {claim.get('confidence', 0):.0%})"
         )
-        console.print(f"[bold]Seen:[/] {claim.get('times_seen', 0)} times, "
-                       f"verified {claim.get('times_verified', 0)} times")
+        console.print(
+            f"[bold]Seen:[/] {claim.get('times_seen', 0)} times, "
+            f"verified {claim.get('times_verified', 0)} times"
+        )
 
         entries = get_claim_history(conn, claim_id)
         if not entries:
