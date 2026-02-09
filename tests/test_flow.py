@@ -18,6 +18,7 @@ import pytest
 from recon.callbacks.audit import AuditLogger
 from recon.callbacks.progress import ProgressTracker
 from recon.config import Depth, KnowledgeConfig, ReconPlan
+from recon.tools.source_tracker import SourceTrackerTool
 
 
 class TestAuditLogger:
@@ -780,3 +781,240 @@ class TestHasPhaseOutput:
 
         result = _has_phase_output(str(d))
         assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# Verification crew tests (Batch 7)
+# ---------------------------------------------------------------------------
+
+
+class TestVerificationCrew:
+    """Test verification crew builder features."""
+
+    @patch("recon.crews.verification.crew.Crew")
+    @patch("recon.crews.verification.crew.Task")
+    @patch("recon.crews.verification.crew.Agent")
+    def test_semantic_verifier_in_tools(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.verification.crew import build_verification_crew
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "test.md").write_text("# Test\nContent here.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
+        crew = build_verification_crew(
+            plan=plan, llm=MagicMock(), search_tools=[MagicMock()],
+            research_dir=str(research_dir),
+        )
+
+        assert crew is not None
+        # Check that SemanticVerifierTool is in the agent's tools
+        agent_kwargs = mock_agent_cls.call_args[1]
+        tool_types = [type(t).__name__ for t in agent_kwargs["tools"]]
+        assert "SemanticVerifierTool" in tool_types
+
+    @patch("recon.crews.verification.crew.Crew")
+    @patch("recon.crews.verification.crew.Task")
+    @patch("recon.crews.verification.crew.Agent")
+    def test_memory_and_embedder_enabled(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.investigation.crew import ONNX_EMBEDDER_CONFIG
+        from recon.crews.verification.crew import build_verification_crew
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "test.md").write_text("# Test\nContent.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
+        build_verification_crew(
+            plan=plan, llm=MagicMock(), search_tools=[],
+            research_dir=str(research_dir),
+        )
+
+        crew_kwargs = mock_crew_cls.call_args[1]
+        assert crew_kwargs["memory"] is True
+        assert crew_kwargs["embedder"] == ONNX_EMBEDDER_CONFIG
+
+    @patch("recon.crews.verification.crew.Crew")
+    @patch("recon.crews.verification.crew.Task")
+    @patch("recon.crews.verification.crew.Agent")
+    def test_report_task_has_guardrail(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.verification.crew import _report_guardrail, build_verification_crew
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "test.md").write_text("# Test\nContent.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
+        build_verification_crew(
+            plan=plan, llm=MagicMock(), search_tools=[],
+            research_dir=str(research_dir),
+        )
+
+        # The third Task call (report_task) should have guardrail
+        assert mock_task_cls.call_count == 3
+        report_task_kwargs = mock_task_cls.call_args_list[2][1]
+        assert report_task_kwargs["guardrail"] is _report_guardrail
+
+    def test_no_research_files(self, tmp_path: Path) -> None:
+        from recon.crews.verification.crew import build_verification_crew
+
+        empty_dir = tmp_path / "empty"
+        empty_dir.mkdir()
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
+        result = build_verification_crew(
+            plan=plan, llm=MagicMock(), search_tools=[],
+            research_dir=str(empty_dir),
+        )
+        assert result is None
+
+    @patch("recon.crews.verification.crew.Crew")
+    @patch("recon.crews.verification.crew.Task")
+    @patch("recon.crews.verification.crew.Agent")
+    def test_conn_and_run_id_forwarded(
+        self,
+        mock_agent_cls: MagicMock,
+        mock_task_cls: MagicMock,
+        mock_crew_cls: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        from recon.crews.verification.crew import build_verification_crew
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "ver.db")
+        insert_run(
+            conn, run_id="run-ver", timestamp="2026-01-15T10:00:00Z",
+            topic="test", depth="quick",
+        )
+
+        research_dir = tmp_path / "research"
+        research_dir.mkdir()
+        (research_dir / "test.md").write_text("# Test\nContent.")
+
+        plan = ReconPlan(topic="Test", depth=Depth.QUICK, verify=True)
+        build_verification_crew(
+            plan=plan, llm=MagicMock(), search_tools=[],
+            research_dir=str(research_dir),
+            conn=conn, run_id="run-ver",
+        )
+
+        # SourceTrackerTool should have conn and run_id
+        agent_kwargs = mock_agent_cls.call_args[1]
+        tracker_tools = [t for t in agent_kwargs["tools"] if isinstance(t, SourceTrackerTool)]
+        assert len(tracker_tools) == 1
+        assert tracker_tools[0].conn is conn
+        assert tracker_tools[0].run_id == "run-ver"
+        conn.close()
+
+
+class TestReportGuardrail:
+    """Test _report_guardrail validation."""
+
+    def test_valid_report_passes(self) -> None:
+        from recon.crews.verification.crew import _report_guardrail
+
+        report = (
+            "## Summary\n\n"
+            "5 claims: 3 VERIFIED, 1 PARTIALLY_VERIFIED, 1 UNVERIFIABLE\n\n"
+            "| ID | Claim | Status |\n|---|---|---|\n"
+            "| C1 | Test | VERIFIED |\n"
+        )
+        ok, result = _report_guardrail(report)
+        assert ok is True
+
+    def test_missing_summary_fails(self) -> None:
+        from recon.crews.verification.crew import _report_guardrail
+
+        report = "Just some text without structure."
+        ok, result = _report_guardrail(report)
+        assert ok is False
+        assert "summary section" in str(result)
+
+    def test_missing_status_marks_fails(self) -> None:
+        from recon.crews.verification.crew import _report_guardrail
+
+        report = "## Summary\n\nNo claims were found."
+        ok, result = _report_guardrail(report)
+        assert ok is False
+        assert "claim status marks" in str(result)
+
+    def test_minimal_valid_report(self) -> None:
+        from recon.crews.verification.crew import _report_guardrail
+
+        report = "Results: 1 VERIFIED claim found."
+        ok, result = _report_guardrail(report)
+        assert ok is True
+
+
+class TestPriorClaimsContext:
+    """Test _get_prior_claims_context and _get_stale_claims_context."""
+
+    def test_prior_claims_found(self, tmp_path: Path) -> None:
+        from recon.crews.verification.crew import _get_prior_claims_context
+        from recon.db import get_db, insert_run, upsert_claim
+
+        conn = get_db(tmp_path / "prior.db")
+        insert_run(
+            conn, run_id="run-old", timestamp="2026-01-10T10:00:00Z",
+            topic="AI", depth="quick",
+        )
+        upsert_claim(
+            conn, claim_id="c1", text="CrewAI has 44K stars",
+            verification_status="VERIFIED", confidence=0.9,
+            run_id="run-old", timestamp="2026-01-10T10:00:00Z",
+            topic_tags=["AI"],
+        )
+
+        result = _get_prior_claims_context(conn, "AI agents")
+        assert "PRIOR VERIFIED CLAIMS" in result
+        assert "CrewAI" in result
+        conn.close()
+
+    def test_no_conn_returns_empty(self) -> None:
+        from recon.crews.verification.crew import _get_prior_claims_context
+
+        assert _get_prior_claims_context(None, "test") == ""
+
+    def test_stale_claims_found(self, tmp_path: Path) -> None:
+        from recon.crews.verification.crew import _get_stale_claims_context
+        from recon.db import get_db, insert_run, upsert_claim
+
+        conn = get_db(tmp_path / "stale.db")
+        insert_run(
+            conn, run_id="run-old", timestamp="2025-01-01T10:00:00Z",
+            topic="test", depth="quick",
+        )
+        upsert_claim(
+            conn, claim_id="stale-1", text="Old claim about AI",
+            verification_status="VERIFIED", confidence=0.8,
+            run_id="run-old", timestamp="2025-01-01T10:00:00Z",
+            topic_tags=["AI"],
+        )
+
+        result = _get_stale_claims_context(conn, "AI", stale_after_days=30)
+        assert "STALE CLAIMS" in result
+        assert "Old claim about AI" in result
+        conn.close()
+
+    def test_stale_no_conn(self) -> None:
+        from recon.crews.verification.crew import _get_stale_claims_context
+
+        assert _get_stale_claims_context(None, "test") == ""
