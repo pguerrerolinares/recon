@@ -1,6 +1,6 @@
 # Recon
 
-[![CI](https://github.com/pguerrerolinares/recon/actions/workflows/ci.yaml/badge.svg)](https://github.com/paulofcardoso/recon/actions)
+[![CI](https://github.com/pguerrerolinares/recon/actions/workflows/ci.yaml/badge.svg)](https://github.com/pguerrerolinares/recon/actions)
 [![PyPI](https://img.shields.io/pypi/v/recon-ai)](https://pypi.org/project/recon-ai/)
 [![Python](https://img.shields.io/pypi/pyversions/recon-ai)](https://pypi.org/project/recon-ai/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
