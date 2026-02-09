@@ -101,7 +101,7 @@ def generate_sub_questions(
     )
 
     try:
-        response = llm.call([prompt])
+        response = llm.call(messages=[{"role": "user", "content": prompt}])
         # Parse response: one question per non-empty line
         lines = [line.strip().lstrip("-•0123456789.) ") for line in str(response).splitlines()]
         questions = [q for q in lines if q and len(q) > 10]
