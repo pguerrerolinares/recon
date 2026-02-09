@@ -1,13 +1,17 @@
 """Rich progress tracking callback for CrewAI execution.
 
 Provides live terminal output with spinners showing which phase is active,
-what agents are working, and phase transitions in real time.
+what agents are working, verification metrics, and phase transitions.
 """
 
 from __future__ import annotations
 
+import contextlib
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import sqlite3
 
 from rich.console import Console
 from rich.live import Live
@@ -55,6 +59,22 @@ class ProgressTracker:
         self._live: Live | None = None
         self._tick = 0
 
+        # Verification metrics (updated via update_verification_metrics).
+        self._verification: dict[str, int] = {
+            "claims_found": 0,
+            "verified": 0,
+            "contradicted": 0,
+            "partial": 0,
+            "unverifiable": 0,
+            "sources_checked": 0,
+        }
+
+        # Token & cost totals (updated via update_token_usage).
+        self._tokens: dict[str, Any] = {
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+        }
+
     def _build_display(self) -> Panel:
         """Build the Rich renderable for the current state."""
         self._tick += 1
@@ -77,6 +97,15 @@ class ProgressTracker:
 
             if phase["status"] == "running":
                 status = Text(f" {spinner} Running", style="bold yellow")
+                # Show live verification metrics during verification phase
+                if phase["name"] == "verification" and self._verification["claims_found"] > 0:
+                    v = self._verification
+                    desc = (
+                        f"{v['claims_found']} claims: "
+                        f"{v['verified']} ok, "
+                        f"{v['contradicted']} bad, "
+                        f"{v['partial']} partial"
+                    )
             elif phase["status"] == "done":
                 elapsed = phase.get("elapsed", "")
                 status = Text(f" Done{elapsed}", style="bold green")
@@ -164,7 +193,16 @@ class ProgressTracker:
             if p["name"] == phase and p["status"] == "running":
                 elapsed = (datetime.now(UTC) - p["start"]).total_seconds()
                 p["status"] = "done"
-                p["detail"] = output_path or p["detail"]
+                # Enrich verification phase detail with final metrics
+                if phase == "verification" and self._verification["claims_found"] > 0:
+                    v = self._verification
+                    p["detail"] = (
+                        f"{v['claims_found']} claims: "
+                        f"{v['verified']} verified, "
+                        f"{v['contradicted']} contradicted"
+                    )
+                else:
+                    p["detail"] = output_path or p["detail"]
                 p["elapsed"] = f" ({elapsed:.0f}s)"
                 break
         self._refresh()
@@ -217,6 +255,44 @@ class ProgressTracker:
                 break
         self._refresh()
 
+    # ------------------------------------------------------------------
+    # Verification metrics (live-updated during verification phase)
+    # ------------------------------------------------------------------
+
+    def update_verification_metrics(
+        self,
+        *,
+        claims_found: int = 0,
+        verified: int = 0,
+        contradicted: int = 0,
+        partial: int = 0,
+        unverifiable: int = 0,
+        sources_checked: int = 0,
+    ) -> None:
+        """Update real-time verification metrics shown in the live display."""
+        self._verification = {
+            "claims_found": claims_found,
+            "verified": verified,
+            "contradicted": contradicted,
+            "partial": partial,
+            "unverifiable": unverifiable,
+            "sources_checked": sources_checked,
+        }
+        self._refresh()
+
+    def update_token_usage(
+        self,
+        total_tokens: int = 0,
+        estimated_cost_usd: float = 0.0,
+    ) -> None:
+        """Update cumulative token usage (shown in the final summary)."""
+        self._tokens["total_tokens"] += total_tokens
+        self._tokens["estimated_cost_usd"] += estimated_cost_usd
+
+    # ------------------------------------------------------------------
+    # Pipeline lifecycle
+    # ------------------------------------------------------------------
+
     def pipeline_start(self, topic: str) -> None:
         """Mark the start of the full pipeline."""
         self.start_time = datetime.now(UTC)
@@ -236,8 +312,10 @@ class ProgressTracker:
         research_files: list[str],
         verification_report: str,
         final_report: str,
+        conn: sqlite3.Connection | None = None,
+        run_id: str | None = None,
     ) -> None:
-        """Print a summary table of all outputs."""
+        """Print a summary table of all outputs + knowledge metrics."""
         table = Table(title="Pipeline Output", show_edge=True)
         table.add_column("Phase", style="cyan")
         table.add_column("File", style="white")
@@ -252,6 +330,51 @@ class ProgressTracker:
             table.add_row("Synthesis", final_report)
 
         self.console.print(table)
+
+        # --- Knowledge DB summary ---
+        if conn is not None and run_id:
+            self._print_knowledge_summary(conn, run_id)
+
+    def _print_knowledge_summary(
+        self, conn: sqlite3.Connection, run_id: str
+    ) -> None:
+        """Print a compact knowledge DB summary for the current run."""
+        with contextlib.suppress(Exception):
+            from recon.db import get_run_stats
+
+            data = get_run_stats(conn, run_id)
+
+            claims = data.get("claims", {})
+            total = claims.get("total_claims", 0)
+            if total > 0:
+                parts = [f"[bold]{total}[/] claims"]
+                verified = claims.get("verified", 0)
+                contradicted = claims.get("contradicted", 0)
+                if verified:
+                    parts.append(f"[green]{verified}[/] verified")
+                if contradicted:
+                    parts.append(f"[red]{contradicted}[/] contradicted")
+                avg_conf = claims.get("avg_confidence")
+                if avg_conf is not None:
+                    parts.append(f"avg confidence {avg_conf:.0%}")
+                self.console.print(f"\nKnowledge: {', '.join(parts)}")
+
+            tokens = data.get("tokens", {})
+            total_tokens = tokens.get("total_tokens", 0)
+            if total_tokens > 0:
+                cost = tokens.get("total_cost", 0)
+                cost_str = f" (${cost:.4f})" if cost else ""
+                self.console.print(
+                    f"Tokens: [bold]{total_tokens:,}[/]{cost_str}"
+                )
+
+            sources = data.get("sources", {})
+            unique = sources.get("unique_sources", 0)
+            if unique > 0:
+                domains = sources.get("unique_domains", 0)
+                self.console.print(
+                    f"Sources: [bold]{unique}[/] URLs from {domains} domains"
+                )
 
     def _log_event(self, event_type: str, subject: str, detail: str = "") -> None:
         """Log an event for later analysis."""

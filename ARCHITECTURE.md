@@ -10,6 +10,7 @@ Recon executes a 3-phase pipeline orchestrated by `flow_builder.py`:
 ```mermaid
 flowchart TD
     P["plan.yaml"] --> FB["flow_builder.py"]
+    DB[("knowledge.db\nSQLite")] <--> FB
 
     FB --> I
 
@@ -27,10 +28,11 @@ flowchart TD
 
     subgraph V ["Phase 2: Verification"]
         direction LR
-        CE["ClaimExtractor\n(regex)"] --> CV["CitationVerifier\n(HTTP fetch)"]
-        CV --> CD["ContradictionDetector\n(heuristic)"]
+        CE["ClaimExtractor\n(regex + LLM filter)"] --> CV["CitationVerifier\n(HTTP fetch)"]
+        CV --> SV["SemanticVerifier\n(LLM judge)"]
+        SV --> CD["ContradictionDetector\n(heuristic)"]
         CD --> CS["ConfidenceScorer\n(deterministic)"]
-        CS --> ST["SourceTracker\n(JSONL write)"]
+        CS --> ST["SourceTracker\n(DB + JSONL)"]
     end
 
     V --> VR["verification/report.md\naudit-trail.jsonl"]
@@ -38,7 +40,7 @@ flowchart TD
     VR --> S
 
     subgraph S ["Phase 3: Synthesis"]
-        DIR["Director agent\nreads research + verification"]
+        DIR["Director agent\nPerplexity-style inline citations"]
     end
 
     S --> OUT["output/final-report.md\naudit-log.jsonl\nrun-{id}.json"]
@@ -46,17 +48,46 @@ flowchart TD
     style I fill:#1a3a5c,stroke:#4a9eed,color:#fff
     style V fill:#3a1a1a,stroke:#ee4a4a,color:#fff
     style S fill:#1a3a1a,stroke:#4aee4a,color:#fff
+    style DB fill:#1a1a3a,stroke:#4a4aee,color:#fff
 ```
 
 | Phase | Agents | Max iterations | LLM calls | Output |
 |-------|--------|----------------|-----------|--------|
 | Investigation | quick=1, standard=3, deep=5 | 10 / 25 / 40 | Yes (web search + report) | `research/*.md`, `sources.json` |
-| Verification | 1 fact-checker | 10 / 25 / 40 | Agent orchestration only | `verification/report.md`, `audit-trail.jsonl` |
-| Synthesis | 1 director | -- | Yes (final report) | `output/final-report.md`, `audit-log.jsonl`, `run-{id}.json` |
+| Verification | 1 fact-checker | 10 / 25 / 40 | Claim extraction LLM filter + semantic verifier | `verification/report.md`, `audit-trail.jsonl` |
+| Synthesis | 1 director | -- | Yes (final report with inline citations) | `output/final-report.md`, `audit-log.jsonl`, `run-{id}.json` |
 
 Each phase is a CrewAI crew with its own agents, tasks, and tools. The flow
-builder wires them together, manages timeouts (SIGALRM), and writes the run
-manifest at the end.
+builder wires them together, manages timeouts (SIGALRM), tracks tokens/cost,
+and persists everything to the knowledge database.
+
+## Knowledge database (`db.py`)
+
+SQLite-backed persistence layer that stores everything across runs.
+Always-on by default (`knowledge.db`). Uses WAL mode for concurrent reads.
+
+### Schema (8 tables + FTS5)
+
+| Table | Purpose |
+|-------|---------|
+| `runs` | Pipeline execution metadata (topic, model, depth, duration) |
+| `phase_metrics` | Per-phase timing, status, output files |
+| `token_usage` | Token counts + estimated cost per phase |
+| `claims` | Extracted claims with verification status and confidence |
+| `claim_sources` | Evidence URLs linked to claims with support type |
+| `claim_history` | Verification audit trail (status changes over time) |
+| `sources` | Global URL registry with reliability scores |
+| `events` | Pipeline events (phase transitions, agent actions) |
+| `claims_fts` | FTS5 virtual table for keyword search over claims |
+
+Auto-sync triggers keep `claims_fts` in sync with `claims` table inserts,
+updates, and deletes.
+
+### Dual-write strategy
+
+All writers (AuditLogger, SourceTracker, SourceExtractor) write to both the
+legacy JSONL files and the SQLite database. DB writes are wrapped in
+`contextlib.suppress(Exception)` so failures never break the pipeline.
 
 ## Module dependencies
 
@@ -64,8 +95,10 @@ manifest at the end.
 graph TD
     CLI["cli.py"] --> FB["flow_builder.py"]
     CLI --> CFG["config.py"]
+    CLI --> DB["db.py"]
 
     FB --> CFG
+    FB --> DB
     FB --> INV["crews/investigation"]
     FB --> VER["crews/verification"]
     FB --> SYN["crews/synthesis"]
@@ -77,15 +110,18 @@ graph TD
     INV --> SCH["providers/search.py"]
     VER --> LLM
     VER --> TOOLS["tools/*"]
+    VER --> DB
     SYN --> LLM
     SYN --> CTX["context/strategy.py"]
+    SYN --> DB
 
-    FB -.-> MEM["memory/store.py"]
+    AUD --> DB
+    SE --> DB
 
     style CLI fill:#2d2d2d,stroke:#888,color:#fff
     style FB fill:#2d2d2d,stroke:#888,color:#fff
+    style DB fill:#1a1a3a,stroke:#4a4aee,color:#fff
     style TOOLS fill:#3a1a1a,stroke:#ee4a4a,color:#fff
-    style MEM fill:#1a1a3a,stroke:#4a4aee,color:#fff,stroke-dasharray: 5 5
 ```
 
 ## Project structure
@@ -93,9 +129,10 @@ graph TD
 ```
 src/recon/
   __init__.py              # Package version
-  config.py                # Pydantic models: ReconPlan, Depth, Investigation
-  cli.py                   # Typer CLI entry point
-  flow_builder.py          # Pipeline orchestrator
+  config.py                # Pydantic models: ReconPlan, KnowledgeConfig, PROVIDER_PRICING
+  cli.py                   # Typer CLI entry point (10 commands)
+  db.py                    # SQLite knowledge database (8 tables, FTS5, migrations)
+  flow_builder.py          # Pipeline orchestrator with DB integration
 
   providers/
     llm.py                 # LLM factory -- 9 OpenAI-compatible providers
@@ -103,17 +140,17 @@ src/recon/
 
   crews/
     investigation/
-      crew.py              # Builds researcher agents + tasks
+      crew.py              # Researcher agents: memory, ONNX embedder, hierarchical (deep)
       config/
-        agents.yaml        # Agent definitions
-        tasks.yaml         # Task definitions
+        agents.yaml
+        tasks.yaml
     verification/
-      crew.py              # Builds fact-checker agent + 5 tools
+      crew.py              # Fact-checker: semantic verifier, guardrails, knowledge context
       config/
         agents.yaml
         tasks.yaml
     synthesis/
-      crew.py              # Builds director agent for final report
+      crew.py              # Director agent: claims context, inline citations, memory
       config/
         agents.yaml
         tasks.yaml
@@ -121,22 +158,20 @@ src/recon/
   tools/
     __init__.py
     _helpers.py            # Shared parse_tool_input() utility
-    claim_extractor.py     # Regex-based claim extraction
+    claim_extractor.py     # Two-stage: regex prefilter + LLM batch filter
     citation_verifier.py   # HTTP fetch + term matching
+    semantic_verifier.py   # LLM judge: SUPPORTS/CONTRADICTS/INSUFFICIENT/UNRELATED
     confidence_scorer.py   # Deterministic 0.0-1.0 scoring
     contradiction_detector.py  # Cross-source consistency check
-    source_tracker.py      # JSONL audit trail per claim
-    source_extractor.py    # URL extraction + sources.json generation
+    source_tracker.py      # Dual-write: DB claims/sources + JSONL
+    source_extractor.py    # URL extraction + DB sources + sources.json
 
   callbacks/
-    progress.py            # Rich Live TUI with spinners
-    audit.py               # JSONL pipeline audit logger (run_id aware)
+    progress.py            # Rich Live TUI with verification metrics
+    audit.py               # Dual-write: DB events + JSONL audit log
 
   context/
     strategy.py            # Token counting + context window management
-
-  memory/
-    store.py               # Cross-run knowledge via memvid .mv2 files
 
   templates/               # 4 YAML plan templates
     market-research.yaml
@@ -144,7 +179,7 @@ src/recon/
     technical-landscape.yaml
     opportunity-finder.yaml
 
-tests/                     # 204 tests, all mocked (no API keys needed)
+tests/                     # 401 tests, all mocked (no API keys needed)
   conftest.py
   test_config.py
   test_cli.py
@@ -153,24 +188,27 @@ tests/                     # 204 tests, all mocked (no API keys needed)
   test_tools.py
   test_flow.py
   test_context.py
+  test_db.py
+  test_memory.py           # KnowledgeConfig + crew feature tests
 ```
 
-## Verification tools (zero LLM cost)
+## Verification tools
 
-The verification phase is Recon's core differentiator. All 5 tools are
-deterministic -- no LLM calls, just regex, HTTP, and arithmetic.
+The verification phase combines deterministic tools with LLM-powered analysis.
 
 ```mermaid
 flowchart LR
-    MD["research/*.md"] --> CE["ClaimExtractor\nregex heuristics"]
+    MD["research/*.md"] --> CE["ClaimExtractor\nprefilter + LLM filter"]
     CE --> |"claims[]"| CV["CitationVerifier\nHTTP fetch + term match"]
-    CV --> |"status per claim"| CD["ContradictionDetector\ncross-claim compare"]
+    CV --> SV["SemanticVerifier\nLLM evidence judge"]
+    SV --> |"status per claim"| CD["ContradictionDetector\ncross-claim compare"]
     CD --> CS["ConfidenceScorer\ndeterministic 0.0-1.0"]
-    CS --> ST["SourceTracker\nJSONL write"]
+    CS --> ST["SourceTracker\nDB + JSONL write"]
     ST --> OUT["verification/\nreport.md\naudit-trail.jsonl"]
 
     style CE fill:#4a2a00,stroke:#ee8a2a,color:#fff
     style CV fill:#4a2a00,stroke:#ee8a2a,color:#fff
+    style SV fill:#2a004a,stroke:#8a2aee,color:#fff
     style CD fill:#4a2a00,stroke:#ee8a2a,color:#fff
     style CS fill:#4a2a00,stroke:#ee8a2a,color:#fff
     style ST fill:#4a2a00,stroke:#ee8a2a,color:#fff
@@ -178,11 +216,16 @@ flowchart LR
 
 ### ClaimExtractorTool (`claim_extractor.py`)
 
-Extracts verifiable factual claims from markdown using regex heuristics.
+Two-stage extraction pipeline:
+
+1. **Pre-filter heuristics**: Rejects markdown noise (table fragments,
+   bibliography entries, bold-label artifacts, incomplete sentences). Strips
+   Sources/References sections before extraction.
+2. **LLM batch filter**: Validates quality, rejects remaining garbage,
+   decomposes compound claims into atomic verifiable statements. Graceful
+   fallback to regex-only on any LLM error.
 
 - Detects 5 claim types: `statistic`, `pricing`, `date`, `attribution`, `quote`
-- Prioritizes claims with cited sources
-- Priority order: statistics > pricing > dates > attributions > quotes
 - Configurable `max_claims` cap
 
 ### CitationVerifierTool (`citation_verifier.py`)
@@ -194,6 +237,15 @@ page content.
 - Match threshold: >= 70% terms found = `VERIFIED`
 - Returns: `VERIFIED`, `PARTIALLY_VERIFIED`, `UNVERIFIABLE`, or `ERROR`
 - Per-domain rate limiting (1 second default)
+
+### SemanticVerifierTool (`semantic_verifier.py`)
+
+LLM-based semantic verification that goes beyond keyword matching.
+
+- Asks the LLM whether the evidence actually supports the claim
+- Returns verdict: `SUPPORTS`, `CONTRADICTS`, `INSUFFICIENT`, `UNRELATED`
+- Includes confidence score (0.0-1.0) and reasoning
+- Graceful fallback on LLM error
 
 ### ConfidenceScorerTool (`confidence_scorer.py`)
 
@@ -215,10 +267,11 @@ Compares two claims for factual contradictions:
 
 ### SourceTrackerTool (`source_tracker.py`)
 
-Writes provenance entries to `verification/audit-trail.jsonl`:
+Dual-write provenance tracking:
 
-- One JSON line per claim with: timestamp, claim_id, claim_text, source_url,
-  verification_status, confidence_score, evidence_excerpt
+- JSONL: `verification/audit-trail.jsonl` (one line per claim)
+- DB: `claims`, `claim_sources`, `claim_history` tables
+- Maps verification status to support types (VERIFIED->supports, etc.)
 
 ## Source extractor (post-processing)
 
@@ -226,6 +279,7 @@ Writes provenance entries to `verification/audit-trail.jsonl`:
 
 - Extracts and deduplicates all URLs from research markdown files
 - Writes `research/sources.json` with counts by URL, document, and domain
+- Writes each unique URL to the DB `sources` table
 - Not a CrewAI tool -- called directly by `flow_builder.py`
 
 ## Configuration model
@@ -245,24 +299,33 @@ class ReconPlan:
     investigations: list[Investigation]
     verification: VerificationConfig
     synthesis: SynthesisConfig
-    memory: MemoryConfig
+    knowledge: KnowledgeConfig      # DB path, embedder, stale_after_days
     auto_questions: bool            # auto-generate sub-questions per angle
     output_dir / research_dir / verification_dir: Path
 ```
 
 ```python
-class Investigation:
-    id: str
-    name: str
-    questions: list[str]
-    instructions: str | None
-
-    def output_path(base_dir: Path) -> Path:
-        # Canonical {id}-{slug}.md path
+class KnowledgeConfig:
+    enabled: bool = True            # Always-on by default
+    db_path: str = "./knowledge.db"
+    embedder: str = "onnx"          # Local ONNX embedder (~80MB, no API key)
+    stale_after_days: int = 30
 ```
 
 Plans load from YAML files or are built inline from CLI flags (`--topic`,
 `--depth`, etc.).
+
+## CrewAI features unlocked (v0.3)
+
+| Feature | Where | Notes |
+|---------|-------|-------|
+| `memory=True` | All crews | ONNX embedder, local (~80MB), no API key |
+| `Process.hierarchical` | Investigation (DEEP) | Research Director manages agents |
+| `reasoning=True` | Investigation agents (DEEP) | Chain-of-thought reasoning |
+| `allow_delegation=True` | Investigation agents (DEEP) | Agents can delegate sub-tasks |
+| `guardrail` | Verification report task | Validates report structure |
+| `step_callback` / `task_callback` | Investigation crew | Forwarded for observability |
+| `usage_metrics` | All crews | Token tracking via `CrewOutput.token_usage` |
 
 ## Context management
 
@@ -272,64 +335,57 @@ window:
 - **Strategy.DIRECT**: Content fits within token limit, pass as-is
 - **Strategy.TRUNCATE**: Content exceeds limit, truncate to fit
 
-Legacy values `summarize` and `map_reduce` are accepted and mapped to
-`TRUNCATE` for backward compatibility.
-
 Token counting uses `tiktoken` with `cl100k_base` encoding.
 
 ## Observability
 
 ```mermaid
 flowchart TD
-    FB["flow_builder.py"] --> AUD["AuditLogger\naudit-log.jsonl"]
+    FB["flow_builder.py"] --> AUD["AuditLogger\nDB events + JSONL"]
     FB --> MAN["Run Manifest\nrun-{id}.json"]
     FB --> PRG["Progress UI\nRich Live TUI"]
+    FB --> DB[("knowledge.db")]
 
-    VER["Verification tools"] --> AT["SourceTracker\naudit-trail.jsonl"]
+    VER["Verification tools"] --> AT["SourceTracker\nDB claims + JSONL"]
 
     SE["SourceExtractor"] --> SJ["sources.json"]
+    SE --> DB
 
     subgraph Output artifacts
         AUD
         MAN
         AT
         SJ
+        DB
     end
 
     style FB fill:#2d2d2d,stroke:#888,color:#fff
+    style DB fill:#1a1a3a,stroke:#4a4aee,color:#fff
 ```
 
 ### Audit logger (`callbacks/audit.py`)
 
-- Writes JSONL entries to `output/audit-log.jsonl`
-- Tracks `run_id`, phase starts/ends, agent actions
-- Calculates `duration_seconds` per phase
-
-### Run manifest (`flow_builder.py`)
-
-Written to `output/run-{id}.json` after pipeline completion:
-
-```json
-{
-  "run_id": "abc123",
-  "timestamp": "2026-02-08T10:00:00Z",
-  "topic": "...",
-  "depth": "deep",
-  "provider": "openrouter",
-  "model": "...",
-  "phases": {
-    "investigation": {"status": "completed", "duration_seconds": 101.2},
-    "verification": {"status": "completed", "duration_seconds": 221.5},
-    "synthesis": {"status": "completed", "duration_seconds": 85.0}
-  },
-  "sources": {"total_urls": 42, "unique_domains": 18}
-}
-```
+Dual-write strategy:
+- JSONL entries to `output/audit-log.jsonl`
+- DB inserts to `events` table
+- Tracks `run_id`, phase starts/ends, agent actions, token counts
+- DB failure never breaks the pipeline
 
 ### Progress UI (`callbacks/progress.py`)
 
-Rich Live TUI showing real-time phase progress with spinners. Displayed
-during `recon run` unless `--verbose` is used (which shows raw CrewAI output).
+Rich Live TUI showing:
+- Real-time phase progress with spinners
+- Live verification metrics (claims found, verified, contradicted)
+- Knowledge DB summary at pipeline end (claims, tokens, cost, sources)
+
+### Run manifest (`flow_builder.py`)
+
+Written to `output/run-{id}.json` after pipeline completion.
+
+### Token tracking + cost estimation
+
+`CrewOutput.token_usage` is captured after each phase and written to the
+`token_usage` table. Cost estimation uses `PROVIDER_PRICING` in `config.py`.
 
 ## CLI commands
 
@@ -338,11 +394,13 @@ during `recon run` unless `--verbose` is used (which shows raw CrewAI output).
 | `recon run [plan.yaml]` | Run the full pipeline. Accepts `--topic`, `--depth`, `--provider`, `--model`, `--verify/--no-verify`, `--dry-run`, `--verbose`, `--memory`, `--force`, `--auto-questions/--no-auto-questions`. |
 | `recon init` | Create a plan file from a template. `--template`, `--output`. |
 | `recon templates` | List available plan templates. |
-| `recon verify <dir>` | Standalone fact-checking on existing research files. `--output`. |
+| `recon verify <dir>` | Standalone fact-checking on existing research files. |
 | `recon status [dir]` | Show pipeline execution status from audit log. |
-| `recon rerun <plan>` | Re-run a specific phase. `--phase investigation\|verification\|synthesis`. |
-| `recon memory stats [path]` | Show memory file statistics. |
-| `recon memory query <q>` | Search prior research in memory. `--path`, `--top`. |
+| `recon rerun <plan>` | Re-run a specific phase. `--phase`. |
+| `recon claims` | Browse verified claims. `--db`, `--run`, `--status`, `--search`, `--limit`. |
+| `recon history <id>` | Show verification history for a claim. `--db`. |
+| `recon stats` | Global or per-run statistics. `--db`, `--run`. |
+| `recon reverify` | List stale claims needing re-verification. `--db`, `--days`, `--topic`, `--limit`. |
 
 ## LLM providers
 
@@ -419,10 +477,11 @@ verification:
 synthesis:
   instructions: "Rank databases by developer experience."
 
-memory:
+knowledge:
   enabled: true
-  path: ./memory/recon.mv2
-  embedding_provider: local
+  db_path: ./knowledge.db
+  embedder: onnx
+  stale_after_days: 30
 
 output_dir: ./output
 research_dir: ./research
@@ -444,28 +503,38 @@ Investigation agent backstories include SOURCE DIVERSITY RULES requiring 3+
 source types (academic, industry, news, official docs, etc.) to avoid
 single-perspective bias.
 
+### Hierarchical process (DEEP depth)
+
+When depth is DEEP and there are multiple investigation angles, the crew uses
+`Process.hierarchical` with a Research Director manager agent. Researcher
+agents get `reasoning=True` and `allow_delegation=True`.
+
 ### Incremental runs
 
 `recon run` skips investigations whose output files already exist unless
 `--force` is passed. This enables incremental re-runs where you add new
 angles without re-running completed ones.
 
-## Cross-run memory
+## Knowledge system
 
-Optional dependency via `pip install recon-ai[memory]`. Uses
-[memvid](https://github.com/memvid/memvid) for single-file knowledge storage.
+SQLite `knowledge.db` replaces the legacy memvid `.mv2` system. Always-on
+by default, no external dependencies.
 
 ```mermaid
 flowchart LR
-    MV2[".mv2 file"] -- "query prior findings" --> INV["Investigation"]
+    DB[("knowledge.db")] -- "FTS5 query prior claims" --> INV["Investigation"]
     INV --> RES["research + verification + report"]
-    RES -- "ingest new knowledge" --> MV2
+    RES -- "upsert claims, sources, events" --> DB
+    DB -- "stale claims context" --> VER["Verification"]
+    DB -- "claims + citations" --> SYN["Synthesis"]
 
-    style MV2 fill:#1a1a3a,stroke:#4a4aee,color:#fff
+    style DB fill:#1a1a3a,stroke:#4a4aee,color:#fff
 ```
 
-The `.mv2` file grows over time. Each project gets its own memory file at
-`./memory/recon.mv2` by default.
+- **Prior knowledge**: FTS5 search over claims table before investigation
+- **Stale claims**: Claims older than `stale_after_days` are surfaced for re-verification
+- **Cross-run enrichment**: Claims seen multiple times get `times_seen` incremented
+- **Inline citations**: Synthesis agent formats Perplexity-style `[1]` references
 
 ## Docker
 

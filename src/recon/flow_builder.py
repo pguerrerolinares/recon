@@ -135,147 +135,52 @@ def _query_prior_knowledge(
 ) -> str | None:
     """Query the knowledge DB for prior claims related to the topic.
 
-    Uses FTS5 keyword search over the claims table.  Falls back to the
-    legacy memvid memory store if the DB has no results and memvid is
-    installed.
+    Uses FTS5 keyword search over the claims table.
 
     Returns a formatted string of prior findings, or None.
     """
     if not plan.knowledge.enabled:
         return None
 
-    # --- Try DB (FTS5) first ---
-    if conn is not None:
-        try:
-            # Search for claims related to the topic
-            keywords = plan.topic.split()[:6]  # Use first 6 words as query
-            query = " OR ".join(keywords)
-            results = _db.search_claims_fts(conn, query, limit=10)
-
-            if results:
-                parts: list[str] = []
-                for i, claim in enumerate(results, 1):
-                    status = claim.get("verification_status", "unknown")
-                    conf = claim.get("confidence")
-                    conf_str = f" (confidence: {conf:.0%})" if conf else ""
-                    parts.append(
-                        f"{i}. [{status}]{conf_str} {claim['text']}"
-                    )
-
-                prior = (
-                    "PRIOR VERIFIED CLAIMS (from previous runs):\n\n"
-                    + "\n".join(parts)
-                )
-                audit.log(
-                    phase="knowledge",
-                    agent="knowledge_db",
-                    action="query",
-                    detail=f"Found {len(results)} prior claims for '{plan.topic}'",
-                    metadata={"results_count": len(results), "topic": plan.topic},
-                )
-                logger.info(
-                    "Found %d prior claims for topic '%s'", len(results), plan.topic
-                )
-                return prior
-        except Exception:
-            logger.debug("FTS5 query failed, trying legacy memory", exc_info=True)
-
-    # --- Legacy fallback: memvid store ---
-    try:
-        from recon.memory.store import MemoryStore
-    except ImportError:
+    if conn is None:
         return None
 
     try:
-        store = MemoryStore(
-            path=plan.knowledge.db_path,
-            embedding_provider=plan.knowledge.embedder,
-        )
-        results = store.query(topic=plan.topic, questions=plan.questions, k=5)
-        store.close()
-    except Exception:
-        logger.warning("Memory query failed, proceeding without prior knowledge", exc_info=True)
-        return None
+        # Search for claims related to the topic
+        keywords = plan.topic.split()[:6]  # Use first 6 words as query
+        query = " OR ".join(keywords)
+        results = _db.search_claims_fts(conn, query, limit=10)
 
-    if not results:
-        return None
+        if not results:
+            return None
 
-    parts_legacy: list[str] = []
-    for i, hit in enumerate(results, 1):
-        title = hit.get("title", "Untitled")
-        text = hit.get("text", "")
-        if text:
-            snippet = text[:500] + "..." if len(text) > 500 else text
-            parts_legacy.append(f"{i}. **{title}**\n   {snippet}")
-
-    if not parts_legacy:
-        return None
-
-    prior = "PRIOR RESEARCH FINDINGS (from previous runs):\n\n" + "\n\n".join(parts_legacy)
-    audit.log(
-        phase="memory",
-        agent="memory_store",
-        action="query",
-        detail=f"Found {len(parts_legacy)} prior findings for '{plan.topic}'",
-        metadata={"results_count": len(parts_legacy), "topic": plan.topic},
-    )
-    return prior
-
-
-def _ingest_to_memory(
-    plan: ReconPlan,
-    run_id: str,
-    research_files: list[str],
-    verification_report: str,
-    final_report: str,
-    audit: AuditLogger,
-) -> None:
-    """Ingest pipeline outputs into legacy cross-run memory (memvid).
-
-    This is kept as a fallback for the transition period.  Once Batch 10
-    removes the ``memory/`` module, this function will be deleted.
-    """
-    if not plan.knowledge.enabled:
-        return
-
-    try:
-        from recon.memory.store import MemoryStore
-    except ImportError:
-        return
-
-    try:
-        store = MemoryStore(
-            path=plan.knowledge.db_path,
-            embedding_provider=plan.knowledge.embedder,
-        )
-        count = store.ingest_research(plan.research_dir, topic=plan.topic, run_id=run_id)
-
-        if verification_report:
-            store.ingest_report(
-                verification_report, topic=plan.topic, run_id=run_id, phase="verification"
-            )
-        if final_report:
-            store.ingest_report(
-                final_report, topic=plan.topic, run_id=run_id, phase="synthesis"
+        parts: list[str] = []
+        for i, claim in enumerate(results, 1):
+            status = claim.get("verification_status", "unknown")
+            conf = claim.get("confidence")
+            conf_str = f" (confidence: {conf:.0%})" if conf else ""
+            parts.append(
+                f"{i}. [{status}]{conf_str} {claim['text']}"
             )
 
-        stats = store.stats()
-        store.close()
-
+        prior = (
+            "PRIOR VERIFIED CLAIMS (from previous runs):\n\n"
+            + "\n".join(parts)
+        )
         audit.log(
-            phase="memory",
-            agent="memory_store",
-            action="ingest",
-            detail=f"Ingested {count} documents into {plan.knowledge.db_path}",
-            metadata={
-                "documents_ingested": count,
-                "run_id": run_id,
-                "memory_stats": stats,
-                "knowledge_db_path": plan.knowledge.db_path,
-            },
+            phase="knowledge",
+            agent="knowledge_db",
+            action="query",
+            detail=f"Found {len(results)} prior claims for '{plan.topic}'",
+            metadata={"results_count": len(results), "topic": plan.topic},
         )
+        logger.info(
+            "Found %d prior claims for topic '%s'", len(results), plan.topic
+        )
+        return prior
     except Exception:
-        logger.warning("Memory ingest failed", exc_info=True)
+        logger.debug("FTS5 query failed", exc_info=True)
+        return None
 
 
 def _write_run_manifest(
@@ -768,16 +673,6 @@ def build_and_run(
                 duration_seconds=round(total_duration, 1),
             )
 
-    # --- Legacy Memory Ingest ---
-    _ingest_to_memory(
-        plan=plan,
-        run_id=run_id,
-        research_files=research_files,
-        verification_report=verification_report,
-        final_report=final_report,
-        audit=audit,
-    )
-
     # --- Summary ---
     progress.pipeline_end()
     progress.summary(
@@ -785,6 +680,8 @@ def build_and_run(
         research_files=research_files,
         verification_report=verification_report,
         final_report=final_report,
+        conn=conn,
+        run_id=run_id,
     )
 
     # --- Run Manifest (still written for backward compat) ---
