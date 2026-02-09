@@ -9,6 +9,7 @@ These tests mock CrewAI to avoid real API calls. They verify that:
 
 from __future__ import annotations
 
+import sqlite3  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 from unittest.mock import MagicMock, patch
 
@@ -64,6 +65,138 @@ class TestAuditLogger:
 
         entries = logger.get_entries()
         assert len(entries[0]["detail"]) <= 2000
+
+
+class TestAuditLoggerDB:
+    """Test AuditLogger dual-write to SQLite events table."""
+
+    def _make_conn(self, tmp_path: Path) -> sqlite3.Connection:
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "audit-test.db")
+        insert_run(
+            conn,
+            run_id="run-audit",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+        )
+        return conn
+
+    def test_log_writes_to_db(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-audit", conn=conn)
+        logger.log(phase="investigation", agent="researcher", action="tool_call", detail="searched")
+
+        from recon.db import get_events
+
+        events = get_events(conn, run_id="run-audit")
+        assert len(events) == 1
+        assert events[0]["action"] == "tool_call"
+        assert events[0]["phase"] == "investigation"
+        assert events[0]["agent"] == "researcher"
+        conn.close()
+
+    def test_log_writes_both_sinks(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-audit", conn=conn)
+        logger.log(phase="test", agent="a", action="x")
+        logger.log(phase="test", agent="b", action="y")
+
+        from recon.db import get_events
+
+        # DB
+        events = get_events(conn, run_id="run-audit")
+        assert len(events) == 2
+        # JSONL
+        disk = logger.read_log()
+        assert len(disk) == 2
+        conn.close()
+
+    def test_log_with_task_and_tokens(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-audit", conn=conn)
+        logger.log(
+            phase="investigation",
+            agent="researcher",
+            action="llm_call",
+            task="market_research",
+            tokens_used=1500,
+        )
+
+        from recon.db import get_events
+
+        events = get_events(conn, run_id="run-audit")
+        assert events[0]["task"] == "market_research"
+        assert events[0]["tokens_used"] == 1500
+        conn.close()
+
+    def test_db_failure_does_not_break_pipeline(self, tmp_path: Path) -> None:
+        """If DB write fails, JSONL should still succeed."""
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "fail.db")
+        insert_run(
+            conn,
+            run_id="run-fail",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+        )
+        # Close the connection so DB writes will fail
+        conn.close()
+
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-fail", conn=conn)
+        # Should NOT raise
+        logger.log(phase="test", agent="test", action="test")
+
+        # JSONL still written
+        disk = logger.read_log()
+        assert len(disk) == 1
+
+    def test_no_conn_jsonl_only(self, tmp_path: Path) -> None:
+        """Without conn, only JSONL is written (backward-compat)."""
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-no-db")
+        logger.log(phase="test", agent="test", action="test")
+
+        entries = logger.get_entries()
+        assert len(entries) == 1
+        disk = logger.read_log()
+        assert len(disk) == 1
+
+    def test_phase_start_end_in_db(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-audit", conn=conn)
+        logger.log_phase_start("investigation")
+        logger.log_phase_end("investigation", output_files=["research/test.md"])
+
+        from recon.db import get_events
+
+        events = get_events(conn, run_id="run-audit")
+        assert len(events) == 2
+        assert events[0]["action"] == "phase_start"
+        assert events[1]["action"] == "phase_end"
+        conn.close()
+
+    def test_metadata_stored_in_db(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        logger = AuditLogger(output_dir=str(tmp_path), run_id="run-audit", conn=conn)
+        logger.log(
+            phase="test",
+            agent="test",
+            action="test",
+            metadata={"key": "value", "count": 42},
+        )
+
+        from recon.db import get_events
+
+        events = get_events(conn, run_id="run-audit")
+        import json
+
+        meta = json.loads(events[0]["metadata_json"])
+        assert meta["key"] == "value"
+        assert meta["count"] == 42
+        conn.close()
 
 
 class TestProgressTracker:

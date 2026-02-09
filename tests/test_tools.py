@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 from unittest.mock import MagicMock
 
@@ -924,6 +925,331 @@ class TestSourceTracker:
     def test_empty_audit_trail(self, tmp_path: Path) -> None:
         entries = read_audit_trail(str(tmp_path / "nonexistent"))
         assert entries == []
+
+
+# --- SourceTracker DB tests ---
+
+
+class TestSourceTrackerDB:
+    """Test SourceTracker dual-write to SQLite claims/claim_sources tables."""
+
+    def _make_conn(self, tmp_path: Path) -> sqlite3.Connection:
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "tracker-test.db")
+        insert_run(
+            conn,
+            run_id="run-track",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+        )
+        return conn
+
+    def test_track_writes_to_db_claims(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        track_source(
+            claim_id="C1",
+            claim_text="CrewAI has 44K stars",
+            source_url="https://github.com/crewAIInc/crewAI",
+            verification_status="VERIFIED",
+            confidence_score=0.85,
+            output_dir=str(tmp_path / "verification"),
+            conn=conn,
+            run_id="run-track",
+        )
+
+        from recon.db import get_claim
+
+        claim = get_claim(conn, "C1")
+        assert claim is not None
+        assert claim["text"] == "CrewAI has 44K stars"
+        assert claim["verification_status"] == "VERIFIED"
+        assert claim["confidence"] == 0.85
+        conn.close()
+
+    def test_track_writes_to_db_claim_sources(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        track_source(
+            claim_id="C1",
+            claim_text="test claim",
+            source_url="https://example.com/page",
+            verification_status="VERIFIED",
+            confidence_score=0.9,
+            output_dir=str(tmp_path / "verification"),
+            conn=conn,
+            run_id="run-track",
+        )
+
+        rows = conn.execute(
+            "SELECT * FROM claim_sources WHERE claim_id = ?", ("C1",)
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["domain"] == "example.com"
+        assert rows[0]["support_type"] == "supports"
+        conn.close()
+
+    def test_track_writes_claim_history(self, tmp_path: Path) -> None:
+        conn = self._make_conn(tmp_path)
+        track_source(
+            claim_id="C2",
+            claim_text="A claim",
+            source_url="https://example.com",
+            verification_status="CONTRADICTED",
+            confidence_score=0.3,
+            output_dir=str(tmp_path / "verification"),
+            conn=conn,
+            run_id="run-track",
+        )
+
+        from recon.db import get_claim_history
+
+        history = get_claim_history(conn, "C2")
+        assert len(history) == 1
+        assert history[0]["new_status"] == "CONTRADICTED"
+        assert history[0]["method"] == "source_tracker"
+        conn.close()
+
+    def test_track_both_sinks(self, tmp_path: Path) -> None:
+        """Both JSONL and DB should have the data."""
+        conn = self._make_conn(tmp_path)
+        output_dir = str(tmp_path / "verification")
+        track_source(
+            claim_id="C3",
+            claim_text="dual write",
+            source_url="https://example.com",
+            verification_status="VERIFIED",
+            confidence_score=0.9,
+            output_dir=output_dir,
+            conn=conn,
+            run_id="run-track",
+        )
+
+        # JSONL
+        entries = read_audit_trail(output_dir)
+        assert len(entries) == 1
+        assert entries[0]["claim_id"] == "C3"
+
+        # DB
+        from recon.db import get_claim
+
+        claim = get_claim(conn, "C3")
+        assert claim is not None
+        conn.close()
+
+    def test_db_failure_does_not_break(self, tmp_path: Path) -> None:
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "fail.db")
+        insert_run(
+            conn,
+            run_id="run-fail",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+        )
+        conn.close()  # Close so DB writes fail
+
+        output_dir = str(tmp_path / "verification")
+        entry = track_source(
+            claim_id="C4",
+            claim_text="should not break",
+            source_url="https://example.com",
+            verification_status="VERIFIED",
+            output_dir=output_dir,
+            conn=conn,
+            run_id="run-fail",
+        )
+        # JSONL still succeeds
+        assert entry["claim_id"] == "C4"
+        entries = read_audit_trail(output_dir)
+        assert len(entries) == 1
+
+    def test_no_conn_jsonl_only(self, tmp_path: Path) -> None:
+        """Without conn, only JSONL written (backward-compat)."""
+        output_dir = str(tmp_path / "verification")
+        entry = track_source(
+            claim_id="C5",
+            claim_text="no db",
+            source_url="https://example.com",
+            verification_status="UNVERIFIABLE",
+            output_dir=output_dir,
+        )
+        assert entry["claim_id"] == "C5"
+        entries = read_audit_trail(output_dir)
+        assert len(entries) == 1
+
+    def test_tool_with_conn(self, tmp_path: Path) -> None:
+        """SourceTrackerTool forwards conn and run_id."""
+        conn = self._make_conn(tmp_path)
+        tool = SourceTrackerTool(
+            output_dir=str(tmp_path / "verification"),
+            conn=conn,
+            run_id="run-track",
+        )
+        result = tool._run(
+            json.dumps(
+                {
+                    "claim_id": "C6",
+                    "claim_text": "tool db test",
+                    "source_url": "https://example.com/tool",
+                    "verification_status": "PARTIALLY_VERIFIED",
+                    "confidence_score": 0.6,
+                }
+            )
+        )
+        parsed = json.loads(result)
+        assert parsed["tracked"] is True
+
+        from recon.db import get_claim
+
+        claim = get_claim(conn, "C6")
+        assert claim is not None
+        assert claim["verification_status"] == "PARTIALLY_VERIFIED"
+        conn.close()
+
+    def test_status_mapping(self, tmp_path: Path) -> None:
+        """Verify status-to-support_type mapping for all statuses."""
+        conn = self._make_conn(tmp_path)
+        cases = [
+            ("C10", "VERIFIED", "supports"),
+            ("C11", "PARTIALLY_VERIFIED", "partial"),
+            ("C12", "UNVERIFIABLE", "insufficient"),
+            ("C13", "CONTRADICTED", "contradicts"),
+        ]
+        for claim_id, status, expected_support in cases:
+            track_source(
+                claim_id=claim_id,
+                claim_text=f"claim {claim_id}",
+                source_url=f"https://example.com/{claim_id}",
+                verification_status=status,
+                output_dir=str(tmp_path / "verification"),
+                conn=conn,
+                run_id="run-track",
+            )
+            row = conn.execute(
+                "SELECT support_type FROM claim_sources WHERE claim_id = ?",
+                (claim_id,),
+            ).fetchone()
+            assert row["support_type"] == expected_support, f"Failed for {status}"
+        conn.close()
+
+
+# --- SourceExtractor DB tests ---
+
+
+class TestSourceExtractorDB:
+    """Test source_extractor writes to SQLite sources table."""
+
+    def _make_conn(self, tmp_path: Path) -> sqlite3.Connection:
+        from recon.db import get_db, insert_run
+
+        conn = get_db(tmp_path / "extractor-test.db")
+        insert_run(
+            conn,
+            run_id="run-extract",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+        )
+        return conn
+
+    def test_write_sources_json_with_db(self, tmp_path: Path) -> None:
+        from recon.tools.source_extractor import write_sources_json
+
+        conn = self._make_conn(tmp_path)
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "overview.md").write_text(
+            "See https://example.com/foo and https://github.com/test for details."
+        )
+
+        result = write_sources_json(str(research), conn=conn, run_id="run-extract")
+        assert result["unique_urls"] == 2
+
+        from recon.db import get_source
+
+        src = get_source(conn, "https://example.com/foo")
+        assert src is not None
+        assert src["domain"] == "example.com"
+
+        src2 = get_source(conn, "https://github.com/test")
+        assert src2 is not None
+        assert src2["domain"] == "github.com"
+        conn.close()
+
+    def test_write_sources_no_conn(self, tmp_path: Path) -> None:
+        """Without conn, only sources.json is written (backward-compat)."""
+        from recon.tools.source_extractor import write_sources_json
+
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "overview.md").write_text("Visit https://example.com for info.")
+
+        result = write_sources_json(str(research))
+        assert result["unique_urls"] == 1
+        assert (research / "sources.json").exists()
+
+    def test_write_sources_db_failure(self, tmp_path: Path) -> None:
+        """DB failure should not break sources.json generation."""
+        from recon.db import get_db, insert_run
+        from recon.tools.source_extractor import write_sources_json
+
+        conn = get_db(tmp_path / "fail.db")
+        insert_run(
+            conn,
+            run_id="run-fail",
+            timestamp="2026-01-15T10:00:00Z",
+            topic="test",
+            depth="quick",
+        )
+        conn.close()  # Close to trigger failure
+
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "overview.md").write_text("See https://example.com for info.")
+
+        result = write_sources_json(str(research), conn=conn, run_id="run-fail")
+        assert result["unique_urls"] == 1
+        assert (research / "sources.json").exists()
+
+    def test_upsert_increments_times_cited(self, tmp_path: Path) -> None:
+        """Running write_sources_json twice should increment times_cited."""
+        from recon.tools.source_extractor import write_sources_json
+
+        conn = self._make_conn(tmp_path)
+        research = tmp_path / "research"
+        research.mkdir()
+        (research / "doc1.md").write_text("See https://example.com for info.")
+
+        # First run: times_cited = 1
+        write_sources_json(str(research), conn=conn, run_id="run-extract")
+        from recon.db import get_source
+
+        src = get_source(conn, "https://example.com")
+        assert src is not None
+        assert src["times_cited"] == 1
+
+        # Second run (e.g. re-run of pipeline): times_cited = 2
+        write_sources_json(str(research), conn=conn, run_id="run-extract")
+        src = get_source(conn, "https://example.com")
+        assert src is not None
+        assert src["times_cited"] == 2
+        conn.close()
+
+    def test_empty_dir_no_db_writes(self, tmp_path: Path) -> None:
+        from recon.tools.source_extractor import write_sources_json
+
+        conn = self._make_conn(tmp_path)
+        research = tmp_path / "empty"
+        research.mkdir()
+
+        result = write_sources_json(str(research), conn=conn, run_id="run-extract")
+        assert result["unique_urls"] == 0
+
+        rows = conn.execute("SELECT COUNT(*) AS cnt FROM sources").fetchone()
+        assert rows["cnt"] == 0
+        conn.close()
 
 
 # --- SemanticVerifier tests ---

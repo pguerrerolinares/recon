@@ -1,20 +1,21 @@
 """Source extractor - extract and deduplicate URLs from research markdown.
 
 Runs as a post-processing step after the investigation phase to produce
-a ``sources.json`` summary file.  This file is useful for:
-
-1. Quick visibility into how many unique sources the investigation found.
-2. Feeding the verification crew a pre-built index of known citations.
-3. Future migration to a SQLite ``sources`` table (v0.3).
+a ``sources.json`` summary file **and** (optionally) write each unique
+URL into the SQLite ``sources`` table for cross-run tracking.
 """
 
 from __future__ import annotations
 
 import json
 import re
+import sqlite3  # noqa: TC003
 from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
+
+from recon import db as _db
 
 # Regex that matches http/https URLs in free text or markdown links.
 _URL_RE = re.compile(r"https?://[^\s\)\]\>,\"']+")
@@ -88,11 +89,17 @@ def extract_sources(research_dir: str) -> dict:
     }
 
 
-def write_sources_json(research_dir: str) -> dict:
-    """Extract sources and write ``sources.json`` to the research directory.
+def write_sources_json(
+    research_dir: str,
+    conn: sqlite3.Connection | None = None,
+    run_id: str | None = None,
+) -> dict:
+    """Extract sources, write ``sources.json``, and optionally persist to DB.
 
     Args:
         research_dir: Directory containing ``*.md`` research files.
+        conn: Optional SQLite connection for DB writes.
+        run_id: Optional run identifier (needed for DB writes).
 
     Returns:
         The sources summary dict (same as :func:`extract_sources`).
@@ -101,6 +108,23 @@ def write_sources_json(research_dir: str) -> dict:
     out_path = Path(research_dir) / "sources.json"
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
+
+    # --- DB write (when available) ---
+    if conn is not None and result["urls"]:
+        now = datetime.now(UTC).isoformat()
+        try:
+            for url_entry in result["urls"]:
+                _db.upsert_source(
+                    conn,
+                    url=url_entry["url"],
+                    domain=url_entry["domain"],
+                    run_id=run_id,
+                    timestamp=now,
+                )
+        except Exception:
+            # DB write failure must never break the pipeline.
+            pass
+
     return result
 
 

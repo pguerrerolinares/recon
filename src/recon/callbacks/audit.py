@@ -1,30 +1,45 @@
 """Audit trail callback - logs every significant action during pipeline execution.
 
-Writes a structured JSON Lines file that can be used to:
-1. Reconstruct what each agent did and when
-2. Debug failed runs
-3. Verify that agents followed their instructions
+Dual-write strategy:
+1. **SQLite** ``events`` table (via :func:`recon.db.insert_event`) — structured,
+   queryable, cross-run.
+2. **JSON Lines** file (``audit-log.jsonl``) — human-readable fallback that
+   works even when the DB is unavailable or the pipeline crashes mid-write.
+
+When a ``sqlite3.Connection`` is provided the logger writes to both sinks.
+When it is *None* (the default, for backward compatibility) only JSONL is
+used.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sqlite3  # noqa: TC003
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from recon import db as _db
+
 
 class AuditLogger:
-    """Log agent actions to a JSON Lines audit file.
+    """Log agent actions to a JSON Lines audit file **and** the knowledge DB.
 
     Each entry records: timestamp, run_id, phase, agent, action, detail, metadata.
     The audit log complements the SourceTracker tool (which tracks
     claim-level provenance) by providing pipeline-level provenance.
     """
 
-    def __init__(self, output_dir: str = "./output", run_id: str = "") -> None:
+    def __init__(
+        self,
+        output_dir: str = "./output",
+        run_id: str = "",
+        conn: sqlite3.Connection | None = None,
+    ) -> None:
         self.output_dir = output_dir
         self.run_id = run_id
+        self.conn = conn
         self.log_path = Path(output_dir) / "audit-log.jsonl"
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self._entries: list[dict[str, Any]] = []
@@ -37,8 +52,10 @@ class AuditLogger:
         action: str,
         detail: str = "",
         metadata: dict[str, Any] | None = None,
+        task: str | None = None,
+        tokens_used: int | None = None,
     ) -> None:
-        """Write an audit log entry.
+        """Write an audit log entry to both JSONL and DB.
 
         Args:
             phase: Pipeline phase (investigation, verification, synthesis).
@@ -46,23 +63,48 @@ class AuditLogger:
             action: What happened (tool_call, task_start, task_end, error, etc.).
             detail: Human-readable description.
             metadata: Optional structured data.
+            task: Optional task name / identifier.
+            tokens_used: Optional token count consumed by this action.
         """
-        timestamp: Any = datetime.now(UTC).isoformat()
+        timestamp: str = datetime.now(UTC).isoformat()
+        truncated_detail = detail[:2000]
+
         entry: dict[str, Any] = {
             "timestamp": timestamp,
             "run_id": self.run_id,
             "phase": phase,
             "agent": agent,
             "action": action,
-            "detail": detail[:2000],
+            "detail": truncated_detail,
         }
+        if task:
+            entry["task"] = task
+        if tokens_used is not None:
+            entry["tokens_used"] = tokens_used
         if metadata:
             entry["metadata"] = metadata
 
         self._entries.append(entry)
 
+        # --- Sink 1: JSONL (always) ---
         with open(self.log_path, "a") as f:
             f.write(json.dumps(entry) + "\n")
+
+        # --- Sink 2: SQLite (when available) ---
+        if self.conn is not None:
+            with contextlib.suppress(Exception):
+                _db.insert_event(
+                    self.conn,
+                    run_id=self.run_id,
+                    timestamp=timestamp,
+                    action=action,
+                    phase=phase,
+                    agent=agent,
+                    task=task,
+                    detail=truncated_detail if truncated_detail else None,
+                    metadata=metadata,
+                    tokens_used=tokens_used,
+                )
 
     def log_phase_start(self, phase: str) -> None:
         """Log the start of a pipeline phase."""
