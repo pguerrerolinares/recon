@@ -347,12 +347,13 @@ class TestInvestigationCrewFeatures:
     @patch("recon.crews.investigation.crew.Crew")
     @patch("recon.crews.investigation.crew.Task")
     @patch("recon.crews.investigation.crew.Agent")
-    def test_deep_uses_hierarchical(
+    def test_deep_uses_sequential(
         self,
         mock_agent_cls: MagicMock,
         mock_task_cls: MagicMock,
         mock_crew_cls: MagicMock,
     ) -> None:
+        """DEEP depth uses sequential (hierarchical disabled due to CrewAI delegation bug)."""
         from crewai import Process
 
         from recon.config import Depth
@@ -369,8 +370,8 @@ class TestInvestigationCrewFeatures:
         )
 
         crew_call_kwargs = mock_crew_cls.call_args[1]
-        assert crew_call_kwargs["process"] == Process.hierarchical
-        assert crew_call_kwargs["manager_agent"] is not None
+        assert crew_call_kwargs["process"] == Process.sequential
+        assert "manager_agent" not in crew_call_kwargs
 
     @patch("recon.crews.investigation.crew.Crew")
     @patch("recon.crews.investigation.crew.Task")
@@ -394,15 +395,12 @@ class TestInvestigationCrewFeatures:
             search_tools=[MagicMock()],
         )
 
-        # Check first researcher agent (not the manager agent)
-        # The first call to Agent should be the manager (from _build_manager_agent)
-        # but since _build_manager_agent is called separately, let's check any
-        # call that has "Researcher" in role
+        # Check researcher agents have reasoning=True but delegation disabled
         for call in mock_agent_cls.call_args_list:
             kwargs = call[1]
             if "Researcher" in kwargs.get("role", ""):
                 assert kwargs["reasoning"] is True
-                assert kwargs["allow_delegation"] is True
+                assert kwargs["allow_delegation"] is False
                 break
         else:
             msg = "No researcher agent found in calls"

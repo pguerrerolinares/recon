@@ -140,7 +140,7 @@ src/recon/
 
   crews/
     investigation/
-      crew.py              # Researcher agents: memory, ONNX embedder, hierarchical (deep)
+      crew.py              # Researcher agents: memory, ONNX embedder, reasoning (deep)
       config/
         agents.yaml
         tasks.yaml
@@ -320,9 +320,7 @@ Plans load from YAML files or are built inline from CLI flags (`--topic`,
 | Feature | Where | Notes |
 |---------|-------|-------|
 | `memory=True` | All crews | ONNX embedder, local (~80MB), no API key |
-| `Process.hierarchical` | Investigation (DEEP) | Research Director manages agents |
 | `reasoning=True` | Investigation agents (DEEP) | Chain-of-thought reasoning |
-| `allow_delegation=True` | Investigation agents (DEEP) | Agents can delegate sub-tasks |
 | `guardrail` | Verification report task | Validates report structure |
 | `step_callback` / `task_callback` | Investigation crew | Forwarded for observability |
 | `usage_metrics` | All crews | Token tracking via `CrewOutput.token_usage` |
@@ -503,11 +501,15 @@ Investigation agent backstories include SOURCE DIVERSITY RULES requiring 3+
 source types (academic, industry, news, official docs, etc.) to avoid
 single-perspective bias.
 
-### Hierarchical process (DEEP depth)
+### DEEP depth enhancements
 
-When depth is DEEP and there are multiple investigation angles, the crew uses
-`Process.hierarchical` with a Research Director manager agent. Researcher
-agents get `reasoning=True` and `allow_delegation=True`.
+When depth is DEEP, researcher agents get `reasoning=True` for chain-of-thought
+reasoning and higher `max_iter` limits (40 vs 10/25).
+
+Note: `Process.hierarchical` and `allow_delegation` are currently disabled
+because CrewAI's delegation tool breaks with OpenAI-compatible providers
+(Kimi, Groq, etc.) -- the tool_call response is not appended to the message
+history, causing a 400 error from the API.
 
 ### Incremental runs
 
