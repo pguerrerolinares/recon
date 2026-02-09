@@ -10,6 +10,7 @@ a structured fact-checking pipeline.
 
 from __future__ import annotations
 
+import sqlite3  # noqa: TC003
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,8 @@ def build_verification_crew(
     search_tools: list[Any],
     research_dir: str,
     verbose: bool = False,
+    conn: sqlite3.Connection | None = None,
+    run_id: str | None = None,
 ) -> Crew | None:
     """Build a verification crew that fact-checks research documents.
 
@@ -43,6 +46,8 @@ def build_verification_crew(
         search_tools: List of search tool instances.
         research_dir: Path to directory containing research markdown files.
         verbose: Whether to enable verbose output.
+        conn: Optional SQLite connection for DB writes (claim tracking).
+        run_id: Optional run identifier for DB writes.
 
     Returns:
         A configured CrewAI Crew, or None if no research files found.
@@ -64,7 +69,7 @@ def build_verification_crew(
         ClaimExtractorTool(max_claims=max_claims, llm=llm),
         CitationVerifierTool(timeout=plan.verification.timeout_per_fetch),
         ConfidenceScorerTool(),
-        SourceTrackerTool(output_dir=plan.verification_dir),
+        SourceTrackerTool(output_dir=plan.verification_dir, conn=conn, run_id=run_id),
         ContradictionDetectorTool(),
     ]
 

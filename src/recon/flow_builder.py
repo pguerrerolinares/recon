@@ -6,25 +6,33 @@ Investigation (parallel) -> Verification (fact-checking) -> Synthesis (report)
 Incremental mode (default): phases with existing output files are skipped.
 Use force=True to re-run all phases regardless.
 
-When knowledge is enabled, the pipeline also:
-- Queries prior knowledge before investigation
-- Ingests all outputs into the knowledge store after synthesis
+When knowledge is enabled, the pipeline:
+- Opens a SQLite connection and records the run in the ``runs`` table.
+- Passes the connection to the AuditLogger, SourceTracker, and
+  SourceExtractor so they can dual-write to the DB.
+- Captures ``CrewOutput.token_usage`` and writes to ``token_usage`` table.
+- Records ``phase_metrics`` for each pipeline phase.
+- Queries prior knowledge (FTS5 claims search) before investigation.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import signal
+import sqlite3  # noqa: TC003
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 
+from recon import db as _db
 from recon.callbacks.audit import AuditLogger
 from recon.callbacks.progress import ProgressTracker
-from recon.config import ReconPlan  # noqa: TC001
+from recon.config import ReconPlan, estimate_cost  # noqa: TC001
 from recon.crews.investigation.crew import build_investigation_crew
 from recon.crews.synthesis.crew import build_synthesis_crew
 from recon.crews.verification.crew import build_verification_crew
@@ -60,19 +68,122 @@ def _has_phase_output(directory: str, pattern: str = "*.md") -> list[str]:
     return [str(f) for f in files if f.stat().st_size > 0]
 
 
-def _query_memory(plan: ReconPlan, audit: AuditLogger) -> str | None:
-    """Query cross-run memory for relevant prior knowledge.
+# ------------------------------------------------------------------
+# DB helpers
+# ------------------------------------------------------------------
 
-    Returns a formatted string of prior findings, or None if memory is
-    disabled, unavailable, or has no relevant results.
+
+def _open_db(plan: ReconPlan) -> sqlite3.Connection | None:
+    """Open (or create) the knowledge database if knowledge is enabled."""
+    if not plan.knowledge.enabled:
+        return None
+    try:
+        return _db.get_db(plan.knowledge.db_path)
+    except Exception:
+        logger.warning("Could not open knowledge DB, proceeding without DB", exc_info=True)
+        return None
+
+
+def _record_token_usage(
+    conn: sqlite3.Connection | None,
+    run_id: str,
+    phase: str,
+    model: str,
+    crew_output: Any,
+) -> None:
+    """Extract token usage from a CrewOutput and write to the DB.
+
+    CrewAI's ``CrewOutput.token_usage`` is a dict like:
+    ``{"total_tokens": N, "prompt_tokens": N, "completion_tokens": N,
+      "cached_tokens": N, "successful_requests": N}``
+    """
+    if conn is None:
+        return
+
+    usage: dict[str, Any] = {}
+    if hasattr(crew_output, "token_usage") and crew_output.token_usage:
+        usage = dict(crew_output.token_usage)
+    if not usage:
+        return
+
+    prompt_tokens = int(usage.get("prompt_tokens", 0))
+    completion_tokens = int(usage.get("completion_tokens", 0))
+    total_tokens = int(usage.get("total_tokens", 0))
+    cached_tokens = int(usage.get("cached_tokens", 0))
+    successful_requests = int(usage.get("successful_requests", 0))
+
+    cost = estimate_cost(model, prompt_tokens, completion_tokens)
+
+    with contextlib.suppress(Exception):
+        _db.insert_token_usage(
+            conn,
+            run_id=run_id,
+            phase=phase,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
+            successful_requests=successful_requests,
+            estimated_cost_usd=cost,
+        )
+
+
+def _query_prior_knowledge(
+    conn: sqlite3.Connection | None,
+    plan: ReconPlan,
+    audit: AuditLogger,
+) -> str | None:
+    """Query the knowledge DB for prior claims related to the topic.
+
+    Uses FTS5 keyword search over the claims table.  Falls back to the
+    legacy memvid memory store if the DB has no results and memvid is
+    installed.
+
+    Returns a formatted string of prior findings, or None.
     """
     if not plan.knowledge.enabled:
         return None
 
+    # --- Try DB (FTS5) first ---
+    if conn is not None:
+        try:
+            # Search for claims related to the topic
+            keywords = plan.topic.split()[:6]  # Use first 6 words as query
+            query = " OR ".join(keywords)
+            results = _db.search_claims_fts(conn, query, limit=10)
+
+            if results:
+                parts: list[str] = []
+                for i, claim in enumerate(results, 1):
+                    status = claim.get("verification_status", "unknown")
+                    conf = claim.get("confidence")
+                    conf_str = f" (confidence: {conf:.0%})" if conf else ""
+                    parts.append(
+                        f"{i}. [{status}]{conf_str} {claim['text']}"
+                    )
+
+                prior = (
+                    "PRIOR VERIFIED CLAIMS (from previous runs):\n\n"
+                    + "\n".join(parts)
+                )
+                audit.log(
+                    phase="knowledge",
+                    agent="knowledge_db",
+                    action="query",
+                    detail=f"Found {len(results)} prior claims for '{plan.topic}'",
+                    metadata={"results_count": len(results), "topic": plan.topic},
+                )
+                logger.info(
+                    "Found %d prior claims for topic '%s'", len(results), plan.topic
+                )
+                return prior
+        except Exception:
+            logger.debug("FTS5 query failed, trying legacy memory", exc_info=True)
+
+    # --- Legacy fallback: memvid store ---
     try:
         from recon.memory.store import MemoryStore
     except ImportError:
-        logger.warning("Memory enabled but memvid-sdk not installed. Skipping memory query.")
         return None
 
     try:
@@ -80,11 +191,7 @@ def _query_memory(plan: ReconPlan, audit: AuditLogger) -> str | None:
             path=plan.knowledge.db_path,
             embedding_provider=plan.knowledge.embedder,
         )
-        results = store.query(
-            topic=plan.topic,
-            questions=plan.questions,
-            k=5,
-        )
+        results = store.query(topic=plan.topic, questions=plan.questions, k=5)
         store.close()
     except Exception:
         logger.warning("Memory query failed, proceeding without prior knowledge", exc_info=True)
@@ -93,28 +200,25 @@ def _query_memory(plan: ReconPlan, audit: AuditLogger) -> str | None:
     if not results:
         return None
 
-    # Format results into a prior knowledge block
-    parts: list[str] = []
+    parts_legacy: list[str] = []
     for i, hit in enumerate(results, 1):
         title = hit.get("title", "Untitled")
         text = hit.get("text", "")
         if text:
-            # Truncate individual results to keep prior knowledge manageable
             snippet = text[:500] + "..." if len(text) > 500 else text
-            parts.append(f"{i}. **{title}**\n   {snippet}")
+            parts_legacy.append(f"{i}. **{title}**\n   {snippet}")
 
-    if not parts:
+    if not parts_legacy:
         return None
 
-    prior = "PRIOR RESEARCH FINDINGS (from previous runs):\n\n" + "\n\n".join(parts)
+    prior = "PRIOR RESEARCH FINDINGS (from previous runs):\n\n" + "\n\n".join(parts_legacy)
     audit.log(
         phase="memory",
         agent="memory_store",
         action="query",
-        detail=f"Found {len(parts)} prior findings for '{plan.topic}'",
-        metadata={"results_count": len(parts), "topic": plan.topic},
+        detail=f"Found {len(parts_legacy)} prior findings for '{plan.topic}'",
+        metadata={"results_count": len(parts_legacy), "topic": plan.topic},
     )
-    logger.info("Found %d relevant prior findings for topic '%s'", len(parts), plan.topic)
     return prior
 
 
@@ -126,14 +230,17 @@ def _ingest_to_memory(
     final_report: str,
     audit: AuditLogger,
 ) -> None:
-    """Ingest pipeline outputs into cross-run memory."""
+    """Ingest pipeline outputs into legacy cross-run memory (memvid).
+
+    This is kept as a fallback for the transition period.  Once Batch 10
+    removes the ``memory/`` module, this function will be deleted.
+    """
     if not plan.knowledge.enabled:
         return
 
     try:
         from recon.memory.store import MemoryStore
     except ImportError:
-        logger.warning("Memory enabled but memvid-sdk not installed. Skipping ingest.")
         return
 
     try:
@@ -141,26 +248,15 @@ def _ingest_to_memory(
             path=plan.knowledge.db_path,
             embedding_provider=plan.knowledge.embedder,
         )
-
-        # Ingest research files
         count = store.ingest_research(plan.research_dir, topic=plan.topic, run_id=run_id)
 
-        # Ingest verification report
         if verification_report:
             store.ingest_report(
-                verification_report,
-                topic=plan.topic,
-                run_id=run_id,
-                phase="verification",
+                verification_report, topic=plan.topic, run_id=run_id, phase="verification"
             )
-
-        # Ingest final report
         if final_report:
             store.ingest_report(
-                final_report,
-                topic=plan.topic,
-                run_id=run_id,
-                phase="synthesis",
+                final_report, topic=plan.topic, run_id=run_id, phase="synthesis"
             )
 
         stats = store.stats()
@@ -178,13 +274,8 @@ def _ingest_to_memory(
                 "knowledge_db_path": plan.knowledge.db_path,
             },
         )
-        logger.info("Ingested %d documents into memory (%s)", count, plan.knowledge.db_path)
-
     except Exception:
-        logger.warning(
-            "Memory ingest failed, pipeline results are still saved to disk",
-            exc_info=True,
-        )
+        logger.warning("Memory ingest failed", exc_info=True)
 
 
 def _write_run_manifest(
@@ -267,6 +358,11 @@ def _write_run_manifest(
     logger.info("Run manifest written to %s", manifest_path)
 
 
+# ------------------------------------------------------------------
+# Main entry point
+# ------------------------------------------------------------------
+
+
 def build_and_run(
     plan: ReconPlan,
     verbose: bool = False,
@@ -288,8 +384,35 @@ def build_and_run(
         console = Console()
 
     run_id = f"run-{uuid.uuid4().hex[:8]}"
+    pipeline_start = datetime.now(UTC)
+
+    # --- Open knowledge DB ---
+    conn = _open_db(plan)
+
+    # Register the run in the DB
+    if conn is not None:
+        with contextlib.suppress(Exception):
+            _db.insert_run(
+                conn,
+                run_id=run_id,
+                timestamp=pipeline_start.isoformat(),
+                topic=plan.topic,
+                depth=plan.depth.value,
+                model=plan.model,
+                provider=plan.provider,
+                search_provider=plan.search.provider,
+                verify=plan.verify,
+                auto_questions=plan.auto_questions,
+                config_json={
+                    "knowledge": plan.knowledge.model_dump(),
+                    "verification": plan.verification.model_dump(),
+                    "synthesis": plan.synthesis.model_dump(),
+                    "context_strategy": plan.context_strategy,
+                },
+            )
+
     progress = ProgressTracker(console=console)
-    audit = AuditLogger(output_dir=plan.output_dir, run_id=run_id)
+    audit = AuditLogger(output_dir=plan.output_dir, run_id=run_id, conn=conn)
 
     # Ensure output directories exist
     Path(plan.research_dir).mkdir(parents=True, exist_ok=True)
@@ -302,8 +425,8 @@ def build_and_run(
     search_tools = create_search_tools(plan)
     investigations = plan.get_investigations()
 
-    # Query memory for prior knowledge (always, even on incremental runs)
-    prior_knowledge = _query_memory(plan, audit)
+    # Query prior knowledge (DB first, then legacy memvid fallback)
+    prior_knowledge = _query_prior_knowledge(conn, plan, audit)
 
     # Check existing output for incremental skip
     existing_research = _has_phase_output(plan.research_dir)
@@ -329,9 +452,31 @@ def build_and_run(
                 detail=f"Skipped: {len(existing_research)} files exist",
                 metadata={"files": existing_research},
             )
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    _db.insert_phase_metric(
+                        conn,
+                        run_id=run_id,
+                        phase="investigation",
+                        status="skipped",
+                        metadata={"files": existing_research},
+                    )
         else:
             progress.phase_start("investigation")
             audit.log_phase_start("investigation")
+            inv_started = datetime.now(UTC)
+
+            # Record phase start in DB
+            inv_metric_id = 0
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    inv_metric_id = _db.insert_phase_metric(
+                        conn,
+                        run_id=run_id,
+                        phase="investigation",
+                        status="running",
+                        started_at=inv_started.isoformat(),
+                    )
 
             for inv in investigations:
                 progress.agent_start(inv.name, inv.output_path(plan.research_dir))
@@ -346,10 +491,16 @@ def build_and_run(
             )
 
             try:
-                investigation_crew.kickoff()
+                inv_result = investigation_crew.kickoff()
             except Exception as e:
                 progress.error("investigation", str(e))
                 audit.log_error("investigation", "investigation_crew", str(e))
+                if conn is not None and inv_metric_id:
+                    with contextlib.suppress(Exception):
+                        _db.update_phase_metric(
+                            conn, inv_metric_id, status="error",
+                            ended_at=datetime.now(UTC).isoformat(),
+                        )
                 raise
 
             research_files = []
@@ -358,12 +509,29 @@ def build_and_run(
                 progress.agent_end(inv.name, out)
                 research_files.append(out)
 
+            inv_ended = datetime.now(UTC)
             audit.log_phase_end("investigation", output_files=research_files)
+
+            # Record token usage + phase completion
+            _record_token_usage(conn, run_id, "investigation", plan.model, inv_result)
+
+            if conn is not None and inv_metric_id:
+                with contextlib.suppress(Exception):
+                    _db.update_phase_metric(
+                        conn,
+                        inv_metric_id,
+                        status="done",
+                        ended_at=inv_ended.isoformat(),
+                        duration_seconds=(inv_ended - inv_started).total_seconds(),
+                        output_files=research_files,
+                    )
 
         # Post-process: extract and deduplicate sources
         from recon.tools.source_extractor import write_sources_json
 
-        sources_summary = write_sources_json(plan.research_dir)
+        sources_summary = write_sources_json(
+            plan.research_dir, conn=conn, run_id=run_id
+        )
         audit.log(
             phase="investigation",
             agent="source_extractor",
@@ -390,9 +558,26 @@ def build_and_run(
                     "verification",
                     "Verification report already exists. Use --force to re-run.",
                 )
+                if conn is not None:
+                    with contextlib.suppress(Exception):
+                        _db.insert_phase_metric(
+                            conn, run_id=run_id, phase="verification", status="skipped",
+                        )
             else:
                 progress.phase_start("verification")
                 audit.log_phase_start("verification")
+                ver_started = datetime.now(UTC)
+
+                ver_metric_id = 0
+                if conn is not None:
+                    with contextlib.suppress(Exception):
+                        ver_metric_id = _db.insert_phase_metric(
+                            conn,
+                            run_id=run_id,
+                            phase="verification",
+                            status="running",
+                            started_at=ver_started.isoformat(),
+                        )
 
                 verification_crew = build_verification_crew(
                     plan=plan,
@@ -400,6 +585,8 @@ def build_and_run(
                     search_tools=search_tools,
                     research_dir=plan.research_dir,
                     verbose=verbose,
+                    conn=conn,
+                    run_id=run_id,
                 )
 
                 if verification_crew is not None:
@@ -418,11 +605,31 @@ def build_and_run(
                             # SIGALRM not available (Windows) -- no timeout
                             pass
 
-                        verification_crew.kickoff()
+                        ver_result = verification_crew.kickoff()
 
                         verification_report = f"{plan.verification_dir}/report.md"
+                        ver_ended = datetime.now(UTC)
                         progress.phase_end("verification", verification_report)
-                        audit.log_phase_end("verification", output_files=[verification_report])
+                        audit.log_phase_end(
+                            "verification", output_files=[verification_report]
+                        )
+
+                        _record_token_usage(
+                            conn, run_id, "verification", plan.model, ver_result
+                        )
+
+                        if conn is not None and ver_metric_id:
+                            with contextlib.suppress(Exception):
+                                _db.update_phase_metric(
+                                    conn,
+                                    ver_metric_id,
+                                    status="done",
+                                    ended_at=ver_ended.isoformat(),
+                                    duration_seconds=(
+                                        ver_ended - ver_started
+                                    ).total_seconds(),
+                                    output_files=[verification_report],
+                                )
                     except _PhaseTimeoutError:
                         logger.warning(
                             "Verification timed out after %ds, proceeding to synthesis",
@@ -437,9 +644,21 @@ def build_and_run(
                             "verification_crew",
                             f"Phase timeout ({timeout}s)",
                         )
+                        if conn is not None and ver_metric_id:
+                            with contextlib.suppress(Exception):
+                                _db.update_phase_metric(
+                                    conn, ver_metric_id, status="timeout",
+                                    ended_at=datetime.now(UTC).isoformat(),
+                                )
                     except Exception as e:
                         progress.error("verification", str(e))
                         audit.log_error("verification", "verification_crew", str(e))
+                        if conn is not None and ver_metric_id:
+                            with contextlib.suppress(Exception):
+                                _db.update_phase_metric(
+                                    conn, ver_metric_id, status="error",
+                                    ended_at=datetime.now(UTC).isoformat(),
+                                )
                         # Verification failure is non-fatal.
                     finally:
                         # Restore original signal handler
@@ -449,8 +668,18 @@ def build_and_run(
                                 signal.signal(signal.SIGALRM, old_handler)
                 else:
                     progress.phase_skip("verification", "no research files found")
+                    if conn is not None and ver_metric_id:
+                        with contextlib.suppress(Exception):
+                            _db.update_phase_metric(
+                                conn, ver_metric_id, status="skipped",
+                            )
         else:
             progress.phase_skip("verification", "disabled")
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    _db.insert_phase_metric(
+                        conn, run_id=run_id, phase="verification", status="disabled",
+                    )
 
         # --- Phase 3: Synthesis ---
         skip_synthesis = not force and len(existing_synthesis) > 0
@@ -461,9 +690,26 @@ def build_and_run(
                 "synthesis",
                 "Final report already exists. Use --force to re-run.",
             )
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    _db.insert_phase_metric(
+                        conn, run_id=run_id, phase="synthesis", status="skipped",
+                    )
         else:
             progress.phase_start("synthesis")
             audit.log_phase_start("synthesis")
+            syn_started = datetime.now(UTC)
+
+            syn_metric_id = 0
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    syn_metric_id = _db.insert_phase_metric(
+                        conn,
+                        run_id=run_id,
+                        phase="synthesis",
+                        status="running",
+                        started_at=syn_started.isoformat(),
+                    )
 
             synthesis_crew = build_synthesis_crew(
                 plan=plan,
@@ -474,21 +720,53 @@ def build_and_run(
             )
 
             try:
-                synthesis_crew.kickoff()
+                syn_result = synthesis_crew.kickoff()
             except Exception as e:
                 progress.error("synthesis", str(e))
                 audit.log_error("synthesis", "synthesis_crew", str(e))
+                if conn is not None and syn_metric_id:
+                    with contextlib.suppress(Exception):
+                        _db.update_phase_metric(
+                            conn, syn_metric_id, status="error",
+                            ended_at=datetime.now(UTC).isoformat(),
+                        )
                 raise
 
             final_report = f"{plan.output_dir}/final-report.md"
+            syn_ended = datetime.now(UTC)
             progress.phase_end("synthesis", final_report)
             audit.log_phase_end("synthesis", output_files=[final_report])
+
+            _record_token_usage(conn, run_id, "synthesis", plan.model, syn_result)
+
+            if conn is not None and syn_metric_id:
+                with contextlib.suppress(Exception):
+                    _db.update_phase_metric(
+                        conn,
+                        syn_metric_id,
+                        status="done",
+                        ended_at=syn_ended.isoformat(),
+                        duration_seconds=(syn_ended - syn_started).total_seconds(),
+                        output_files=[final_report],
+                    )
 
     finally:
         # Always stop the live display to restore terminal state.
         progress.stop_live()
 
-    # --- Memory Ingest (always, even on incremental runs) ---
+    # --- Update run status ---
+    pipeline_end = datetime.now(UTC)
+    total_duration = (pipeline_end - pipeline_start).total_seconds()
+    if conn is not None:
+        with contextlib.suppress(Exception):
+            _db.update_run(
+                conn,
+                run_id,
+                status="done",
+                duration_seconds=round(total_duration, 1),
+            )
+
+    # --- Legacy Memory Ingest ---
     _ingest_to_memory(
         plan=plan,
         run_id=run_id,
@@ -507,7 +785,7 @@ def build_and_run(
         final_report=final_report,
     )
 
-    # --- Run Manifest ---
+    # --- Run Manifest (still written for backward compat) ---
     _write_run_manifest(
         plan=plan,
         run_id=run_id,
@@ -518,3 +796,8 @@ def build_and_run(
         sources_summary=sources_summary,
         pipeline_start=progress.start_time,
     )
+
+    # Close DB connection
+    if conn is not None:
+        with contextlib.suppress(Exception):
+            conn.close()

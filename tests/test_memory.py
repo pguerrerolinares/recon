@@ -437,7 +437,7 @@ class TestFlowBuilderMemory:
     """Test that flow_builder correctly integrates memory."""
 
     @patch("recon.flow_builder._ingest_to_memory")
-    @patch("recon.flow_builder._query_memory")
+    @patch("recon.flow_builder._query_prior_knowledge")
     @patch("recon.flow_builder.create_search_tools")
     @patch("recon.flow_builder.create_llm")
     @patch("recon.flow_builder.build_synthesis_crew")
@@ -487,7 +487,7 @@ class TestFlowBuilderMemory:
         assert inv_call_kwargs["prior_knowledge"] == "Prior: CrewAI has 44K stars"
 
     @patch("recon.flow_builder._ingest_to_memory")
-    @patch("recon.flow_builder._query_memory")
+    @patch("recon.flow_builder._query_prior_knowledge")
     @patch("recon.flow_builder.create_search_tools")
     @patch("recon.flow_builder.create_llm")
     @patch("recon.flow_builder.build_synthesis_crew")
@@ -528,7 +528,7 @@ class TestFlowBuilderMemory:
         build_and_run(plan, verbose=False)
 
         mock_query.assert_called_once()
-        # _query_memory is always called but returns None when disabled
+        # _query_prior_knowledge is always called but returns None when disabled
         # _ingest_to_memory is always called but returns early when disabled
         mock_ingest.assert_called_once()
 

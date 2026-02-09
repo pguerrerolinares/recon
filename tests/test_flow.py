@@ -17,7 +17,7 @@ import pytest
 
 from recon.callbacks.audit import AuditLogger
 from recon.callbacks.progress import ProgressTracker
-from recon.config import Depth, ReconPlan
+from recon.config import Depth, KnowledgeConfig, ReconPlan
 
 
 class TestAuditLogger:
@@ -196,6 +196,159 @@ class TestAuditLoggerDB:
         meta = json.loads(events[0]["metadata_json"])
         assert meta["key"] == "value"
         assert meta["count"] == 42
+        conn.close()
+
+
+class TestRecordTokenUsage:
+    """Test _record_token_usage helper."""
+
+    def test_records_usage(self, tmp_path: Path) -> None:
+        from recon.db import get_db, get_token_usage_by_run, insert_run
+        from recon.flow_builder import _record_token_usage
+
+        conn = get_db(tmp_path / "token.db")
+        insert_run(
+            conn, run_id="run-tok", timestamp="2026-01-15T10:00:00Z",
+            topic="test", depth="quick", model="kimi-k2.5",
+        )
+
+        mock_output = MagicMock()
+        mock_output.token_usage = {
+            "prompt_tokens": 1000,
+            "completion_tokens": 500,
+            "total_tokens": 1500,
+            "cached_tokens": 200,
+            "successful_requests": 3,
+        }
+
+        _record_token_usage(conn, "run-tok", "investigation", "kimi-k2.5", mock_output)
+
+        usage = get_token_usage_by_run(conn, "run-tok")
+        assert len(usage) == 1
+        assert usage[0]["prompt_tokens"] == 1000
+        assert usage[0]["completion_tokens"] == 500
+        assert usage[0]["total_tokens"] == 1500
+        assert usage[0]["cached_tokens"] == 200
+        assert usage[0]["successful_requests"] == 3
+        assert usage[0]["estimated_cost_usd"] is not None
+        conn.close()
+
+    def test_no_conn_is_noop(self) -> None:
+        from recon.flow_builder import _record_token_usage
+
+        mock_output = MagicMock()
+        mock_output.token_usage = {"total_tokens": 100}
+        # Should not raise
+        _record_token_usage(None, "run-x", "test", "model", mock_output)
+
+    def test_no_token_usage_attr(self, tmp_path: Path) -> None:
+        from recon.db import get_db, get_token_usage_by_run, insert_run
+        from recon.flow_builder import _record_token_usage
+
+        conn = get_db(tmp_path / "token.db")
+        insert_run(
+            conn, run_id="run-no", timestamp="2026-01-15T10:00:00Z",
+            topic="test", depth="quick",
+        )
+
+        # CrewOutput without token_usage attribute
+        _record_token_usage(conn, "run-no", "investigation", "model", "just a string")
+
+        usage = get_token_usage_by_run(conn, "run-no")
+        assert len(usage) == 0
+        conn.close()
+
+
+class TestOpenDB:
+    """Test _open_db helper."""
+
+    def test_opens_when_enabled(self, tmp_path: Path) -> None:
+        from recon.config import KnowledgeConfig
+        from recon.flow_builder import _open_db
+
+        plan = ReconPlan(
+            topic="Test",
+            knowledge=KnowledgeConfig(
+                enabled=True,
+                db_path=str(tmp_path / "knowledge.db"),
+            ),
+        )
+        conn = _open_db(plan)
+        assert conn is not None
+        conn.close()
+
+    def test_none_when_disabled(self) -> None:
+        from recon.config import KnowledgeConfig
+        from recon.flow_builder import _open_db
+
+        plan = ReconPlan(
+            topic="Test",
+            knowledge=KnowledgeConfig(enabled=False),
+        )
+        conn = _open_db(plan)
+        assert conn is None
+
+
+class TestQueryPriorKnowledge:
+    """Test _query_prior_knowledge helper."""
+
+    def test_returns_prior_claims(self, tmp_path: Path) -> None:
+        from recon.db import get_db, insert_run, upsert_claim
+        from recon.flow_builder import _query_prior_knowledge
+
+        conn = get_db(tmp_path / "prior.db")
+        insert_run(
+            conn, run_id="run-old", timestamp="2026-01-10T10:00:00Z",
+            topic="AI agents", depth="standard",
+        )
+        upsert_claim(
+            conn, claim_id="c-old-1", text="CrewAI has 44K GitHub stars",
+            verification_status="VERIFIED", confidence=0.92,
+            run_id="run-old", timestamp="2026-01-10T10:05:00Z",
+            topic_tags=["AI", "agents"],
+        )
+
+        plan = ReconPlan(
+            topic="AI agents",
+            knowledge=KnowledgeConfig(
+                enabled=True, db_path=str(tmp_path / "prior.db")
+            ),
+        )
+        audit = AuditLogger(output_dir=str(tmp_path), run_id="run-new")
+
+        result = _query_prior_knowledge(conn, plan, audit)
+        assert result is not None
+        assert "PRIOR VERIFIED CLAIMS" in result
+        assert "CrewAI" in result
+        conn.close()
+
+    def test_returns_none_when_disabled(self, tmp_path: Path) -> None:
+        from recon.flow_builder import _query_prior_knowledge
+
+        plan = ReconPlan(
+            topic="Test",
+            knowledge=KnowledgeConfig(enabled=False),
+        )
+        audit = AuditLogger(output_dir=str(tmp_path), run_id="run-test")
+
+        result = _query_prior_knowledge(None, plan, audit)
+        assert result is None
+
+    def test_returns_none_when_no_results(self, tmp_path: Path) -> None:
+        from recon.db import get_db
+        from recon.flow_builder import _query_prior_knowledge
+
+        conn = get_db(tmp_path / "empty.db")
+        plan = ReconPlan(
+            topic="completely unknown topic xyz",
+            knowledge=KnowledgeConfig(
+                enabled=True, db_path=str(tmp_path / "empty.db")
+            ),
+        )
+        audit = AuditLogger(output_dir=str(tmp_path), run_id="run-empty")
+
+        result = _query_prior_knowledge(conn, plan, audit)
+        assert result is None
         conn.close()
 
 
